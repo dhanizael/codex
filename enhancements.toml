@@ -101,3 +101,15 @@ tests = [
   "just test -p codex-core output_spill -E <sandbox-safe-partition>",
   "just fix -p codex-core",
 ]
+
+[[enhancements]]
+id = "failure-aware-local-preflight"
+title = "Detect local execution blockers before expensive turns"
+kind = "enhancement"
+commits = ["b250651d091536760288ba8eb65cd3ede5cfccf3"]
+areas = ["cli", "doctor", "preflight"]
+tests = [
+  "just test -p codex-cli preflight -E <sandbox-safe-partition>",
+  "just test -p codex-cli worktree -E <sandbox-safe-partition>",
+  "just fix -p codex-cli",
+]
