@@ -73,6 +73,7 @@ const SESSION_META_MIN_CWD_WIDTH: usize = 30;
 const SESSION_META_MAX_CWD_WIDTH: usize = 72;
 const SESSION_META_BRANCH_ICON: &str = "";
 const SESSION_META_CWD_ICON: &str = "⌁";
+const SESSION_PIN_ICON: &str = "●";
 const FOOTER_COMPACT_BREAKPOINT: u16 = 120;
 const FOOTER_HINT_LEFT_PADDING: usize = 1;
 const FOOTER_HINT_GAP: usize = 3;
@@ -150,8 +151,16 @@ struct PageLoadRequest {
 
 enum PickerLoadRequest {
     Page(PageLoadRequest),
-    Preview { thread_id: ThreadId },
-    Transcript { thread_id: ThreadId },
+    Preview {
+        thread_id: ThreadId,
+    },
+    Transcript {
+        thread_id: ThreadId,
+    },
+    SetPinned {
+        thread_id: ThreadId,
+        is_pinned: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -253,6 +262,11 @@ enum BackgroundEvent {
     Transcript {
         thread_id: ThreadId,
         transcript: std::io::Result<TranscriptCells>,
+    },
+    PinUpdated {
+        thread_id: ThreadId,
+        is_pinned: bool,
+        result: std::io::Result<()>,
     },
 }
 
@@ -599,6 +613,21 @@ fn spawn_app_server_page_loader(
                         transcript,
                     });
                 }
+                PickerLoadRequest::SetPinned {
+                    thread_id,
+                    is_pinned,
+                } => {
+                    let result = app_server
+                        .thread_metadata_update_pin(thread_id, is_pinned)
+                        .await
+                        .map(|_| ())
+                        .map_err(std::io::Error::other);
+                    let _ = bg_tx.send(BackgroundEvent::PinUpdated {
+                        thread_id,
+                        is_pinned,
+                        result,
+                    });
+                }
             }
         }
         if let Err(err) = app_server.shutdown().await {
@@ -667,6 +696,7 @@ struct PickerState {
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
     expanded_thread_id: Option<ThreadId>,
+    pending_pin_updates: HashSet<ThreadId>,
     transcript_previews: HashMap<ThreadId, TranscriptPreviewState>,
     transcript_cells: HashMap<ThreadId, SessionTranscriptState>,
     pending_transcript_open: Option<ThreadId>,
@@ -867,6 +897,7 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    is_pinned: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -964,6 +995,7 @@ impl PickerState {
             sort_key: ThreadSortKey::UpdatedAt,
             inline_error: None,
             expanded_thread_id: None,
+            pending_pin_updates: HashSet::new(),
             transcript_previews: HashMap::new(),
             transcript_cells: HashMap::new(),
             pending_transcript_open: None,
@@ -1126,6 +1158,13 @@ impl PickerState {
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_density().await;
+            }
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::ALT) => {
+                self.toggle_selected_pin();
             }
             KeyEvent {
                 code: KeyCode::Char('\u{000f}'),
@@ -1364,6 +1403,27 @@ impl PickerState {
                     self.request_frame();
                 }
             },
+            BackgroundEvent::PinUpdated {
+                thread_id,
+                is_pinned,
+                result,
+            } => {
+                self.pending_pin_updates.remove(&thread_id);
+                match result {
+                    Ok(()) => {
+                        for row in &mut self.all_rows {
+                            if row.thread_id == Some(thread_id) {
+                                row.is_pinned = is_pinned;
+                            }
+                        }
+                        self.apply_filter_preserving_selection(Some(SeenRowKey::Thread(thread_id)));
+                    }
+                    Err(err) => {
+                        self.inline_error = Some(format!("Could not update session pin: {err}"));
+                        self.request_frame();
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1435,6 +1495,7 @@ impl PickerState {
             let q = self.query.to_lowercase();
             self.filtered_rows = base_iter.filter(|r| r.matches_query(&q)).cloned().collect();
         }
+        self.filtered_rows.sort_by_key(|row| !row.is_pinned);
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
         }
@@ -1443,6 +1504,38 @@ impl PickerState {
         }
         self.ensure_selected_visible();
         self.request_frame();
+    }
+
+    fn apply_filter_preserving_selection(&mut self, selected_key: Option<SeenRowKey>) {
+        self.apply_filter();
+        if let Some(selected_key) = selected_key
+            && let Some(index) = self
+                .filtered_rows
+                .iter()
+                .position(|row| row.seen_key().as_ref() == Some(&selected_key))
+        {
+            self.selected = index;
+            self.ensure_selected_visible();
+            self.request_frame();
+        }
+    }
+
+    fn toggle_selected_pin(&mut self) {
+        let Some(row) = self.filtered_rows.get(self.selected) else {
+            return;
+        };
+        let Some(thread_id) = row.thread_id else {
+            self.inline_error = Some("Cannot pin this session".to_string());
+            self.request_frame();
+            return;
+        };
+        if !self.pending_pin_updates.insert(thread_id) {
+            return;
+        }
+        (self.picker_loader)(PickerLoadRequest::SetPinned {
+            thread_id,
+            is_pinned: !row.is_pinned,
+        });
     }
 
     fn row_matches_filter(&self, row: &Row) -> bool {
@@ -1830,6 +1923,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         cwd: Some(thread.cwd.to_path_buf()),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
+        is_pinned: thread.is_pinned,
     })
 }
 
@@ -2251,6 +2345,12 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
             priority: 3,
         },
         PickerFooterHint {
+            key: "alt+p",
+            wide_label: String::from("pin/unpin"),
+            compact_label: String::from("pin"),
+            priority: 7,
+        },
+        PickerFooterHint {
             key: "ctrl+t",
             wide_label: String::from("transcript"),
             compact_label: String::from("preview"),
@@ -2560,13 +2660,22 @@ fn render_comfortable_session_lines(
     width: u16,
 ) -> Vec<Line<'static>> {
     let marker = selection_marker(is_selected, is_expanded);
-    let title = truncate_text(row.display_preview(), width.saturating_sub(2) as usize);
+    let pin_width = usize::from(row.is_pinned) * 2;
+    let title = truncate_text(
+        row.display_preview(),
+        (width as usize).saturating_sub(2 + pin_width),
+    );
     let title = if is_selected {
         selected_session_title_span(title)
     } else {
         title.into()
     };
-    let title_line = Line::from(vec![marker, title]);
+    let pin: Span<'static> = if row.is_pinned {
+        format!("{SESSION_PIN_ICON} ").cyan()
+    } else {
+        "".into()
+    };
+    let title_line = Line::from(vec![marker, pin, title]);
     let mut lines = vec![title_line];
     let row_style = if is_selected {
         Some(dense_selected_style())
@@ -2651,6 +2760,7 @@ fn render_dense_session_lines(
         marker,
         date: &date,
         title: row.display_preview(),
+        is_pinned: row.is_pinned,
         is_selected,
         is_zebra,
         width,
@@ -2665,6 +2775,7 @@ struct DenseSummaryInput<'a> {
     marker: Span<'static>,
     date: &'a str,
     title: &'a str,
+    is_pinned: bool,
     is_selected: bool,
     is_zebra: bool,
     width: u16,
@@ -2672,7 +2783,8 @@ struct DenseSummaryInput<'a> {
 
 fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
     let marker_width = input.marker.width();
-    let available = (input.width as usize).saturating_sub(marker_width);
+    let pin_width = usize::from(input.is_pinned) * 2;
+    let available = (input.width as usize).saturating_sub(marker_width + pin_width);
     let columns = dense_columns(available);
     let title = if input.is_selected {
         selected_session_title_span(dense_column_text(input.title, columns.title_width))
@@ -2680,8 +2792,14 @@ fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
         dense_column_text(input.title, columns.title_width).into()
     };
 
+    let pin: Span<'static> = if input.is_pinned {
+        format!("{SESSION_PIN_ICON} ").cyan()
+    } else {
+        "".into()
+    };
     let spans = vec![
         input.marker,
+        pin,
         dense_column_text(input.date, columns.date_width).dim(),
         title,
     ];
@@ -3279,6 +3397,7 @@ mod tests {
             updated_at: Some(timestamp),
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         }
     }
 
@@ -3325,6 +3444,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -3365,11 +3485,66 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/tmp/codex-session-picker")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            is_pinned: false,
         };
 
         assert!(row.matches_query("session-picker"));
         assert!(row.matches_query("fcoury"));
         assert!(row.matches_query(&thread_id.to_string()[..8]));
+    }
+
+    #[test]
+    fn pinned_rows_sort_before_unpinned_rows_without_changing_group_order() {
+        let mut first = make_row("/tmp/a.jsonl", "2026-04-28T16:00:00Z", "first");
+        let mut second = make_row("/tmp/b.jsonl", "2026-04-28T15:00:00Z", "second");
+        let third = make_row("/tmp/c.jsonl", "2026-04-28T14:00:00Z", "third");
+        first.is_pinned = true;
+        second.is_pinned = true;
+
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.all_rows = vec![third, first, second];
+
+        state.apply_filter();
+
+        assert_eq!(
+            state
+                .filtered_rows
+                .iter()
+                .map(|row| row.preview.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn pinned_row_renders_visible_indicator() {
+        let mut row = make_row("/tmp/a.jsonl", "2026-04-28T16:00:00Z", "Pinned session");
+        row.is_pinned = true;
+        let loader = page_only_loader(|_| {});
+        let state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let rendered = render_comfortable_session_lines(
+            &row, &state, /*is_selected*/ false, /*is_expanded*/ false,
+            /*is_zebra*/ false, /*width*/ 80,
+        )[0]
+        .to_string();
+
+        assert_snapshot!("resume_picker_pinned_session", rendered);
     }
 
     #[test]
@@ -3425,6 +3600,7 @@ mod tests {
             updated_at: parse_timestamp_str("2026-05-02T14:48:19Z"),
             cwd: Some(PathBuf::from("/Users/felipe.coury/code/codex")),
             git_branch: Some(String::from("codex/raw-scrollback-mode")),
+            is_pinned: false,
         };
 
         let rendered = render_expanded_session_details(&row, &state, /*width*/ 120)
@@ -3635,6 +3811,7 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/real-project")),
             git_branch: None,
+            is_pinned: false,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -3660,6 +3837,7 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
             git_branch: None,
+            is_pinned: false,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -3691,6 +3869,7 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
@@ -3701,6 +3880,7 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/c.jsonl")),
@@ -3711,6 +3891,7 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             },
         ];
         state.all_rows = rows.clone();
@@ -4139,6 +4320,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         }];
 
         state
@@ -4177,6 +4359,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             },
             Row {
                 path: None,
@@ -4187,6 +4370,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             },
         ];
         state.pending_transcript_open = Some(thread_id);
@@ -4256,6 +4440,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             },
             Row {
                 path: None,
@@ -4266,6 +4451,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             },
         ];
         state.update_viewport(/*rows*/ 7, /*width*/ 80);
@@ -4321,6 +4507,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         }];
 
         state
@@ -4351,6 +4538,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         }];
 
         state
@@ -4427,6 +4615,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         }];
         state.transcript_cells.insert(
             thread_id,
@@ -4591,6 +4780,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         }];
 
         state
@@ -4630,6 +4820,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         }];
 
         state
@@ -4708,6 +4899,7 @@ session_picker_view = "dense"
                 "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs",
             )),
             git_branch: Some(String::from("fcoury/session-picker")),
+            is_pinned: false,
         }
     }
 
@@ -4840,6 +5032,7 @@ session_picker_view = "dense"
             marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
             date: "15m ago",
             title: "Selected dense row",
+            is_pinned: false,
             is_selected: true,
             is_zebra: false,
             width: 80,
@@ -4856,6 +5049,7 @@ session_picker_view = "dense"
             marker: selection_marker(/*is_selected*/ false, /*is_expanded*/ false),
             date: "15m ago",
             title: "Zebra dense row",
+            is_pinned: false,
             is_selected: false,
             is_zebra: true,
             width: 80,
@@ -4960,6 +5154,7 @@ session_picker_view = "dense"
             updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
             cwd: Some(PathBuf::from("/tmp/codex")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            is_pinned: false,
         };
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -5029,6 +5224,7 @@ session_picker_view = "dense"
             updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
             cwd: Some(PathBuf::from("/tmp/codex")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            is_pinned: false,
         };
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -5087,6 +5283,7 @@ session_picker_view = "dense"
                 updated_at: Some(now - Duration::minutes(idx * 5)),
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             })
             .collect();
         state.filtered_rows = state.all_rows.clone();
@@ -5139,6 +5336,7 @@ session_picker_view = "dense"
                 updated_at: Some(now - Duration::minutes(idx * 5)),
                 cwd: None,
                 git_branch: None,
+                is_pinned: false,
             })
             .collect();
         state.filtered_rows = state.all_rows.clone();
@@ -5690,6 +5888,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -5729,6 +5928,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_pinned: false,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];

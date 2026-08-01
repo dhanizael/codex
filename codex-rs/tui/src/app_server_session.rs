@@ -835,6 +835,25 @@ impl AppServerSession {
             .wrap_err("thread/metadata/update failed while syncing git branch")
     }
 
+    pub(crate) async fn thread_metadata_update_pin(
+        &mut self,
+        thread_id: ThreadId,
+        is_pinned: bool,
+    ) -> Result<ThreadMetadataUpdateResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadMetadataUpdate {
+                request_id,
+                params: ThreadMetadataUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    is_pinned: Some(is_pinned),
+                    git_info: None,
+                },
+            })
+            .await
+            .wrap_err("thread/metadata/update failed while updating session pin")
+    }
+
     pub(crate) async fn thread_settings_update(
         &mut self,
         params: ThreadSettingsUpdateParams,
