@@ -220,6 +220,7 @@ struct PreparedProcessHandles {
     network_approval: Option<DeferredNetworkApproval>,
     call_id: String,
     hook_command: String,
+    full_output_path: Option<std::path::PathBuf>,
     process_id: i32,
     tty: bool,
 }
@@ -467,7 +468,7 @@ impl UnifiedExecProcessManager {
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-        start_streaming_output(&process, context, Arc::clone(&transcript));
+        let full_output_path = start_streaming_output(&process, context, Arc::clone(&transcript));
         let start = Instant::now();
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
@@ -488,6 +489,7 @@ impl UnifiedExecProcessManager {
                 network_denial_monitor,
                 Arc::clone(&transcript),
                 Arc::clone(&initial_exec_command_active),
+                full_output_path.clone(),
             )
             .await;
             Some(InitialExecCommandGuard {
@@ -661,6 +663,32 @@ impl UnifiedExecProcessManager {
             (None, exit_code)
         };
 
+        let mut full_output_path = full_output_path;
+        let truncation_policy: codex_utils_output_truncation::TruncationPolicy =
+            context.turn.model_info.truncation_policy.into();
+        let model_output_max_tokens = request
+            .max_output_tokens
+            .unwrap_or(match exit_code {
+                Some(exit_code) if exit_code != 0 => {
+                    crate::unified_exec::DEFAULT_MAX_ERROR_OUTPUT_TOKENS
+                }
+                Some(_) | None => crate::unified_exec::DEFAULT_MAX_OUTPUT_TOKENS,
+            })
+            .min(truncation_policy.token_budget());
+        let output_will_be_truncated =
+            output_omitted_bytes.is_some() || original_token_count > model_output_max_tokens;
+        if response_process_id.is_none()
+            && !output_will_be_truncated
+            && let Some(path) = full_output_path.take()
+            && let Err(error) = std::fs::remove_file(&path)
+        {
+            tracing::warn!(
+                %error,
+                path = %path.display(),
+                "failed to remove unneeded unified exec output spill"
+            );
+        }
+
         let response = ExecCommandToolOutput {
             event_call_id: context.call_id.clone(),
             chunk_id,
@@ -672,6 +700,7 @@ impl UnifiedExecProcessManager {
             exit_code,
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
+            full_output_path,
             hook_command: Some(request.hook_command.clone()),
         };
 
@@ -709,6 +738,7 @@ impl UnifiedExecProcessManager {
             network_approval,
             call_id,
             hook_command,
+            full_output_path,
             process_id,
             tty,
             ..
@@ -847,6 +877,7 @@ impl UnifiedExecProcessManager {
             exit_code,
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
+            full_output_path,
             hook_command: Some(hook_command),
         };
 
@@ -935,6 +966,7 @@ impl UnifiedExecProcessManager {
             network_approval: entry.network_approval.clone(),
             call_id: entry.call_id.clone(),
             hook_command: entry.hook_command.clone(),
+            full_output_path: entry.full_output_path.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
         })
@@ -956,6 +988,7 @@ impl UnifiedExecProcessManager {
         network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
         initial_exec_command_active: Arc<AtomicBool>,
+        full_output_path: Option<std::path::PathBuf>,
     ) {
         let entry = ProcessEntry {
             process: Arc::clone(&process),
@@ -964,6 +997,7 @@ impl UnifiedExecProcessManager {
             cwd: cwd.clone(),
             initial_exec_command_active,
             hook_command,
+            full_output_path,
             tty,
             network_approval,
             session: Arc::downgrade(&context.session),

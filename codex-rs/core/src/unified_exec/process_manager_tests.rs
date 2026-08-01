@@ -545,6 +545,7 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
                 cwd: cwd.clone(),
                 initial_exec_command_active: Arc::new(AtomicBool::new(false)),
                 hook_command: format!("command-{process_id}"),
+                full_output_path: None,
                 tty: false,
                 network_approval: None,
                 session: std::sync::Weak::new(),

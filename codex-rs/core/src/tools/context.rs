@@ -27,6 +27,7 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -327,6 +328,8 @@ pub struct ExecCommandToolOutput {
     pub original_token_count: Option<usize>,
     /// Bytes omitted by the output collection cap before model-facing truncation.
     pub output_omitted_bytes: Option<NonZeroUsize>,
+    /// Private file containing the complete byte stream for this command.
+    pub full_output_path: Option<PathBuf>,
     pub hook_command: Option<String>,
 }
 
@@ -386,6 +389,8 @@ impl ToolOutput for ExecCommandToolOutput {
             session_id: Option<i32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             original_token_count: Option<usize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            full_output_path: Option<String>,
             output: String,
         }
 
@@ -395,6 +400,9 @@ impl ToolOutput for ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
+            full_output_path: self
+                .full_output_reference()
+                .map(|path| path.display().to_string()),
             output: match self.max_output_tokens {
                 Some(max_tokens) => self.truncated_output(max_tokens),
                 None => String::from_utf8_lossy(&self.raw_output).to_string(),
@@ -473,10 +481,25 @@ impl ExecCommandToolOutput {
             sections.push(format!("Original token count: {original_token_count}"));
         }
 
+        if let Some(path) = self.full_output_reference() {
+            sections.push(format!("Full output saved to: {}", path.display()));
+        }
+
         sections.push("Output:".to_string());
         sections.push(self.truncated_output(self.model_output_max_tokens()));
 
         sections.join("\n")
+    }
+
+    fn full_output_reference(&self) -> Option<&std::path::Path> {
+        let max_tokens = self.model_output_max_tokens();
+        let is_truncated = self.output_omitted_bytes.is_some()
+            || self
+                .original_token_count
+                .is_some_and(|original_token_count| original_token_count > max_tokens);
+        is_truncated
+            .then_some(self.full_output_path.as_deref())
+            .flatten()
     }
 }
 

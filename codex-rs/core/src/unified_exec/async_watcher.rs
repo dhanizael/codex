@@ -8,6 +8,7 @@ use tokio::time::Instant;
 use tokio::time::Sleep;
 
 use super::UnifiedExecContext;
+use super::output_spill::OutputSpill;
 use super::process::OutputHandles;
 use super::process::UnifiedExecProcess;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
@@ -37,6 +38,12 @@ pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 /// process arbitrarily large delta payloads.
 const UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES: usize = 8192;
 
+struct StreamingOutputState {
+    pending: Vec<u8>,
+    emitted_deltas: usize,
+    output_spill: Option<OutputSpill>,
+}
+
 /// Spawn a background task that continuously reads from the PTY, appends to the
 /// shared transcript, and emits ExecCommandOutputDelta events on UTF‑8
 /// boundaries.
@@ -44,7 +51,7 @@ pub(crate) fn start_streaming_output(
     process: &UnifiedExecProcess,
     context: &UnifiedExecContext,
     transcript: Arc<Mutex<HeadTailBuffer>>,
-) {
+) -> Option<std::path::PathBuf> {
     let mut receiver = process.output_receiver();
     let output_drained = process.output_drained_notify();
     let exit_token = process.cancellation_token();
@@ -57,12 +64,29 @@ pub(crate) fn start_streaming_output(
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.turn);
     let call_id = context.call_id.clone();
+    let output_spill = match OutputSpill::create(
+        &context.turn.config.codex_home,
+        &context.session.session_id().to_string(),
+        &call_id,
+    ) {
+        Ok(spill) => Some(spill),
+        Err(error) => {
+            tracing::warn!(%error, %call_id, "failed to create unified exec output spill");
+            None
+        }
+    };
+    let output_spill_path = output_spill
+        .as_ref()
+        .map(|spill| spill.path().to_path_buf());
 
     tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
 
-        let mut pending = Vec::<u8>::new();
-        let mut emitted_deltas: usize = 0;
+        let mut state = StreamingOutputState {
+            pending: Vec::new(),
+            emitted_deltas: 0,
+            output_spill,
+        };
 
         let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
         let output_closed_notified = output_closed_notify.notified();
@@ -109,12 +133,11 @@ pub(crate) fn start_streaming_output(
                     };
 
                     process_chunk(
-                        &mut pending,
+                        &mut state,
                         &transcript,
                         &call_id,
                         &session_ref,
                         &turn_ref,
-                        &mut emitted_deltas,
                         chunk,
                     ).await;
                 }
@@ -137,12 +160,11 @@ pub(crate) fn start_streaming_output(
                 };
 
                 process_chunk(
-                    &mut pending,
+                    &mut state,
                     &transcript,
                     &call_id,
                     &session_ref,
                     &turn_ref,
-                    &mut emitted_deltas,
                     chunk,
                 )
                 .await;
@@ -150,6 +172,7 @@ pub(crate) fn start_streaming_output(
         }
         output_drained.notify_one();
     });
+    output_spill_path
 }
 
 /// Spawn a background watcher that waits for the PTY to exit and then emits a
@@ -220,22 +243,31 @@ pub(crate) fn spawn_exit_watcher(
 }
 
 async fn process_chunk(
-    pending: &mut Vec<u8>,
+    state: &mut StreamingOutputState,
     transcript: &Arc<Mutex<HeadTailBuffer>>,
     call_id: &str,
     session_ref: &Arc<Session>,
     turn_ref: &Arc<TurnContext>,
-    emitted_deltas: &mut usize,
     chunk: Vec<u8>,
 ) {
-    pending.extend_from_slice(&chunk);
-    while let Some(prefix) = split_valid_utf8_prefix(pending) {
+    if let Some(spill) = state.output_spill.as_mut()
+        && let Err(error) = spill.write(&chunk)
+    {
+        tracing::warn!(
+            %error,
+            path = %spill.path().display(),
+            "failed to write unified exec output spill"
+        );
+        state.output_spill = None;
+    }
+    state.pending.extend_from_slice(&chunk);
+    while let Some(prefix) = split_valid_utf8_prefix(&mut state.pending) {
         {
             let mut guard = transcript.lock().await;
             guard.push_chunk(prefix.to_vec());
         }
 
-        if *emitted_deltas >= MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
+        if state.emitted_deltas >= MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
             continue;
         }
 
@@ -247,7 +279,7 @@ async fn process_chunk(
         session_ref
             .send_event(turn_ref.as_ref(), EventMsg::ExecCommandOutputDelta(event))
             .await;
-        *emitted_deltas += 1;
+        state.emitted_deltas += 1;
     }
 }
 

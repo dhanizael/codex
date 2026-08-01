@@ -435,6 +435,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         exit_code: Some(0),
         original_token_count: Some(10),
         output_omitted_bytes: None,
+        full_output_path: None,
         hook_command: None,
     }
     .to_response_item("call-42", &payload);
@@ -464,6 +465,42 @@ fn exec_command_tool_output_formats_truncated_response() {
 }
 
 #[test]
+fn exec_command_tool_output_references_full_output_only_when_truncated() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let path = std::path::PathBuf::from("/private/tool-output/call.log");
+    let output = |original_token_count| ExecCommandToolOutput {
+        event_call_id: "call-file-backed".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: b"preview".to_vec(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: Some(100),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(original_token_count),
+        output_omitted_bytes: None,
+        full_output_path: Some(path.clone()),
+        hook_command: None,
+    };
+
+    let truncated = output(101).to_response_item("call-file-backed", &payload);
+    let complete = output(100).to_response_item("call-file-backed", &payload);
+
+    let response_text = |item: ResponseInputItem| match item {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            output.body.to_text().expect("response should be text")
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    };
+    assert!(
+        response_text(truncated).contains(&format!("Full output saved to: {}", path.display()))
+    );
+    assert!(!response_text(complete).contains("Full output saved to:"));
+}
+
+#[test]
 fn exec_command_tool_output_adapts_default_budget_to_exit_status() {
     let output = |exit_code, max_output_tokens| ExecCommandToolOutput {
         event_call_id: "call-adaptive-budget".to_string(),
@@ -476,6 +513,7 @@ fn exec_command_tool_output_adapts_default_budget_to_exit_status() {
         exit_code,
         original_token_count: None,
         output_omitted_bytes: None,
+        full_output_path: None,
         hook_command: None,
     };
 
@@ -511,6 +549,7 @@ fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
         exit_code: Some(0),
         original_token_count: Some(42_000),
         output_omitted_bytes: NonZeroUsize::new(/*n*/ 123_456),
+        full_output_path: None,
         hook_command: None,
     }
     .to_response_item("call-omitted", &payload);
@@ -541,6 +580,7 @@ fn exec_command_tool_output_coalesces_repeated_diagnostics() {
         exit_code: Some(1),
         original_token_count: None,
         output_omitted_bytes: None,
+        full_output_path: None,
         hook_command: None,
     };
 
@@ -563,6 +603,7 @@ fn exec_command_tool_output_strips_ansi_colors_for_model() {
         exit_code: Some(1),
         original_token_count: None,
         output_omitted_bytes: None,
+        full_output_path: None,
         hook_command: None,
     };
 
@@ -583,6 +624,7 @@ fn exec_command_tool_output_preserves_non_color_ansi_sequences() {
         exit_code: Some(0),
         original_token_count: None,
         output_omitted_bytes: None,
+        full_output_path: None,
         hook_command: None,
     };
     assert_eq!(output.truncated_output(10_000), cursor_control);
@@ -607,6 +649,7 @@ fn failed_exec_truncation_preserves_diagnostic_from_middle() {
         exit_code: Some(1),
         original_token_count: None,
         output_omitted_bytes: None,
+        full_output_path: None,
         hook_command: None,
     };
 
@@ -631,6 +674,7 @@ fn exec_command_tool_output_preserves_repeated_non_diagnostics() {
         exit_code: Some(0),
         original_token_count: None,
         output_omitted_bytes: None,
+        full_output_path: None,
         hook_command: None,
     };
 

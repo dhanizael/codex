@@ -24,6 +24,7 @@ struct StreamingOutputHarness {
     stdout_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
     exit_tx: tokio::sync::oneshot::Sender<i32>,
     transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+    output_spill_path: std::path::PathBuf,
     context: UnifiedExecContext,
     rx_event: async_channel::Receiver<Event>,
 }
@@ -48,16 +49,43 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
     let (session, turn, rx_event) = make_session_and_context_with_rx().await;
     let context = UnifiedExecContext::new(session, turn, "streaming-output-test".to_string());
     let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
-    start_streaming_output(&process, &context, Arc::clone(&transcript));
+    let output_spill_path = start_streaming_output(&process, &context, Arc::clone(&transcript))
+        .expect("test output spill should be created");
 
     Ok(StreamingOutputHarness {
         process,
         stdout_tx,
         exit_tx,
         transcript,
+        output_spill_path,
         context,
         rx_event,
     })
+}
+
+#[tokio::test]
+async fn streaming_output_spill_preserves_bytes_beyond_memory_cap() -> anyhow::Result<()> {
+    let StreamingOutputHarness {
+        process,
+        stdout_tx,
+        exit_tx,
+        output_spill_path,
+        ..
+    } = streaming_output_harness().await?;
+    let output_drained = process.output_drained_notify();
+    let drained = output_drained.notified();
+    tokio::pin!(drained);
+    let full_output = vec![b'x'; crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES + 1];
+
+    stdout_tx
+        .send(full_output.clone())
+        .expect("send oversized output");
+    exit_tx.send(0).expect("send exit");
+    drop(stdout_tx);
+    (&mut drained).await;
+
+    assert_eq!(std::fs::read(output_spill_path)?, full_output);
+    Ok(())
 }
 
 #[tokio::test]
@@ -136,6 +164,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         transcript,
         context,
         rx_event,
+        output_spill_path: _,
     } = streaming_output_harness().await?;
 
     tokio::time::pause();

@@ -46,6 +46,7 @@ use crate::tools::network_approval::DeferredNetworkApproval;
 mod async_watcher;
 mod errors;
 mod head_tail_buffer;
+mod output_spill;
 mod process;
 mod process_manager;
 mod process_state;
@@ -172,6 +173,7 @@ struct ProcessEntry {
     cwd: PathUri,
     initial_exec_command_active: Arc<std::sync::atomic::AtomicBool>,
     hook_command: String,
+    full_output_path: Option<std::path::PathBuf>,
     tty: bool,
     network_approval: Option<DeferredNetworkApproval>,
     session: Weak<Session>,
