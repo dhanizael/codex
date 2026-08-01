@@ -1,4 +1,5 @@
 pub(crate) mod command_runner;
+mod command_stream;
 pub(crate) mod discovery;
 pub(crate) mod dispatcher;
 pub(crate) mod output_parser;

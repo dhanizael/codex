@@ -63,7 +63,7 @@ impl JobObject {
     ///
     /// Assignment is not retroactive: descendants created before this call
     /// completes are not guaranteed to become members of the job.
-    pub(crate) fn assign_process(&self, process_handle: RawHandle) -> io::Result<()> {
+    pub fn assign_process(&self, process_handle: RawHandle) -> io::Result<()> {
         let assigned = unsafe {
             AssignProcessToJobObject(self.handle.as_raw_handle().cast(), process_handle.cast())
         };

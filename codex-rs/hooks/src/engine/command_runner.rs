@@ -8,9 +8,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::Span;
+use tracing::warn;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::command_stream::capture_stream;
 use super::dispatcher::hook_event_name_label;
 use super::dispatcher::hook_execution_mode_label;
 use super::dispatcher::hook_handler_type_label;
@@ -65,6 +67,12 @@ pub(crate) async fn run_command(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    #[cfg(unix)]
+    command.process_group(0);
+
+    #[cfg(windows)]
+    let job = codex_utils_pty::JobObject::create().ok();
+
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
@@ -82,18 +90,34 @@ pub(crate) async fn run_command(
         }
     };
 
+    let mut process_tree = ProcessTree::attach(
+        &mut child,
+        #[cfg(windows)]
+        job,
+    );
+
+    let stdout_task = child
+        .stdout
+        .take()
+        .map(|stdout| tokio::spawn(capture_stream(stdout, "stdout")));
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|stderr| tokio::spawn(capture_stream(stderr, "stderr")));
+
     if let Some(mut stdin) = child.stdin.take()
         && let Err(err) = stdin.write_all(input_json.as_bytes()).await
         && err.kind() != ErrorKind::BrokenPipe
     {
-        let _ = child.kill().await;
+        process_tree.terminate(&mut child).await;
+        let (stdout, stderr) = collect_outputs(stdout_task, stderr_task).await;
         return finish_command_run(
             started_at,
             started,
             CommandRunCompletion {
                 exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
+                stdout,
+                stderr,
                 error: Some(format!("failed to write hook stdin: {err}")),
                 outcome: "stdin_error",
             },
@@ -101,40 +125,145 @@ pub(crate) async fn run_command(
     }
 
     let timeout_duration = Duration::from_secs(handler.timeout_sec);
-    match timeout(timeout_duration, child.wait_with_output()).await {
-        Ok(Ok(output)) => finish_command_run(
-            started_at,
-            started,
-            CommandRunCompletion {
-                exit_code: output.status.code(),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                error: None,
-                outcome: "completed",
-            },
-        ),
-        Ok(Err(err)) => finish_command_run(
-            started_at,
-            started,
-            CommandRunCompletion {
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                error: Some(err.to_string()),
-                outcome: "wait_error",
-            },
-        ),
-        Err(_) => finish_command_run(
-            started_at,
-            started,
-            CommandRunCompletion {
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
-                outcome: "timeout",
-            },
-        ),
+    match timeout(timeout_duration, child.wait()).await {
+        Ok(Ok(status)) => {
+            process_tree.disarm();
+            let (stdout, stderr) = collect_outputs(stdout_task, stderr_task).await;
+            finish_command_run(
+                started_at,
+                started,
+                CommandRunCompletion {
+                    exit_code: status.code(),
+                    stdout,
+                    stderr,
+                    error: None,
+                    outcome: "completed",
+                },
+            )
+        }
+        Ok(Err(err)) => {
+            process_tree.terminate(&mut child).await;
+            let (stdout, stderr) = collect_outputs(stdout_task, stderr_task).await;
+            finish_command_run(
+                started_at,
+                started,
+                CommandRunCompletion {
+                    exit_code: None,
+                    stdout,
+                    stderr,
+                    error: Some(err.to_string()),
+                    outcome: "wait_error",
+                },
+            )
+        }
+        Err(_) => {
+            process_tree.terminate(&mut child).await;
+            let (stdout, stderr) = collect_outputs(stdout_task, stderr_task).await;
+            finish_command_run(
+                started_at,
+                started,
+                CommandRunCompletion {
+                    exit_code: None,
+                    stdout,
+                    stderr,
+                    error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
+                    outcome: "timeout",
+                },
+            )
+        }
+    }
+}
+
+async fn collect_outputs(
+    stdout_task: Option<tokio::task::JoinHandle<String>>,
+    stderr_task: Option<tokio::task::JoinHandle<String>>,
+) -> (String, String) {
+    let stdout = async { join_output(stdout_task).await };
+    let stderr = async { join_output(stderr_task).await };
+    tokio::join!(stdout, stderr)
+}
+
+async fn join_output(task: Option<tokio::task::JoinHandle<String>>) -> String {
+    match task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+struct ProcessTree {
+    armed: bool,
+    #[cfg(unix)]
+    process_group_id: Option<u32>,
+    #[cfg(windows)]
+    job: Option<codex_utils_pty::JobObject>,
+}
+
+impl ProcessTree {
+    fn attach(
+        child: &mut tokio::process::Child,
+        #[cfg(windows)] job: Option<codex_utils_pty::JobObject>,
+    ) -> Self {
+        #[cfg(unix)]
+        let process_group_id = child.id();
+        #[cfg(windows)]
+        let job = job.and_then(|job| {
+            let handle = child.raw_handle()?;
+            if let Err(error) = job.assign_process(handle) {
+                warn!("failed to contain hook process tree: {error}");
+                return None;
+            }
+            Some(job)
+        });
+        Self {
+            armed: true,
+            #[cfg(unix)]
+            process_group_id,
+            #[cfg(windows)]
+            job,
+        }
+    }
+
+    async fn terminate(&mut self, child: &mut tokio::process::Child) {
+        self.kill_tree();
+        self.armed = false;
+
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            let _ = child.kill().await;
+        }
+    }
+
+    fn disarm(&mut self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job.as_ref()
+            && let Err(error) = job.preserve_descendants()
+        {
+            warn!("failed to preserve hook descendants after normal exit: {error}");
+        }
+        self.armed = false;
+    }
+
+    fn kill_tree(&self) {
+        #[cfg(unix)]
+        if let Some(process_group_id) = self.process_group_id
+            && let Err(error) = codex_utils_pty::process_group::kill_process_group(process_group_id)
+        {
+            warn!("failed to terminate hook process group {process_group_id}: {error}");
+        }
+
+        #[cfg(windows)]
+        if let Some(job) = self.job.as_ref()
+            && let Err(error) = job.terminate()
+        {
+            warn!("failed to terminate hook job: {error}");
+        }
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        if self.armed {
+            self.kill_tree();
+        }
     }
 }
 
