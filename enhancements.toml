@@ -1,0 +1,63 @@
+schema_version = 1
+upstream_base = "rust-v0.146.0"
+
+[[enhancements]]
+id = "runtime-hardening"
+title = "Harden enhanced Codex runtime"
+kind = "enhancement"
+commits = ["07c5f3f16f75331790938da2f970328fa8acc537"]
+areas = ["cli", "config", "context", "models", "protocol", "tools"]
+tests = [
+  "just test -p codex-cli",
+  "just test -p codex-config",
+  "just test -p codex-core",
+  "just test -p codex-models-manager",
+  "just test -p codex-protocol",
+]
+
+[[enhancements]]
+id = "selective-local-compaction-retry"
+title = "Retry local compaction selectively"
+kind = "fix"
+commits = ["d7ecd479659342325bf6d43a3763c44eed8ecb2e"]
+areas = ["compaction", "core"]
+tests = ["just test -p codex-core compact"]
+
+[[enhancements]]
+id = "model-instruction-guards"
+title = "Guard model instruction tuning"
+kind = "enhancement"
+commits = ["0d5396503a069bef24e1d7b7034015ea2fd4a7cc"]
+areas = ["cli", "config", "model-instructions", "session-lock"]
+tests = [
+  "just test -p codex-cli",
+  "just test -p codex-config",
+  "just test -p codex-core",
+]
+
+[[enhancements]]
+id = "runtime-provenance"
+title = "Report build provenance and source parity"
+kind = "enhancement"
+commits = ["ad78ac75c089dc4f5333c919aab3d583f11b2f2d"]
+areas = ["build-metadata", "cli", "doctor", "source-parity"]
+tests = ["just test -p codex-cli"]
+
+[[enhancements]]
+id = "session-pinning"
+title = "Pin sessions in the resume picker"
+kind = "enhancement"
+commits = ["060398f62470044b5f2ce1c512b3772aff804d15"]
+areas = ["app-server", "resume-picker", "tui"]
+tests = ["just test -p codex-tui resume_picker"]
+
+[[enhancements]]
+id = "workspace-version-lock-sync"
+title = "Synchronize workspace versions in Cargo.lock"
+kind = "maintenance"
+commits = ["0333bf45aefd8accba0e19c662083156b40f9d33"]
+areas = ["bazel", "cargo", "lockfiles"]
+tests = [
+  "cargo metadata --locked --format-version 1",
+  "just bazel-lock-check",
+]
