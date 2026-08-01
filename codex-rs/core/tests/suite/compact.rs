@@ -3709,6 +3709,68 @@ async fn manual_compact_retries_after_context_window_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_does_not_retry_non_retryable_http_error() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let user_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(user_turn),
+            invalid_request_response("permanent compact failure"),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(3);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200_000);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+    let task_error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(task_error_message.contains("permanent compact failure"));
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        request_log.requests().len(),
+        2,
+        "a permanent HTTP error must not consume the stream retry budget"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Re-enable after the follow-up compaction behavior PR lands.
 // Current main behavior around non-context manual /compact failures is known-incorrect.
 #[ignore = "behavior change covered in follow-up compaction PR"]
