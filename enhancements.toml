@@ -113,3 +113,16 @@ tests = [
   "just test -p codex-cli worktree -E <sandbox-safe-partition>",
   "just fix -p codex-cli",
 ]
+
+[[enhancements]]
+id = "hook-command-output-hardening"
+title = "Bound hook output and terminate timed-out process trees"
+kind = "enhancement"
+commits = ["27917f223cf1a28ba14f1c2d3200b4f1ce768747"]
+areas = ["hooks", "output-spill", "process-containment"]
+tests = [
+  "just test -p codex-hooks -E <sandbox-safe-partition>",
+  "just fix -p codex-hooks",
+  "just fix -p codex-utils-pty",
+  "just bazel-lock-check",
+]
