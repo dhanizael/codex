@@ -75,3 +75,17 @@ tests = [
   "just test -p codex-core unified_exec",
   "just fix -p codex-core",
 ]
+
+[[enhancements]]
+id = "capability-aware-test-partitioning"
+title = "Partition capability-sensitive focused tests"
+kind = "maintenance"
+commits = ["e4244e0d8a2374346241b00ee53ce55cfd37fca8"]
+areas = ["maintainer-workflow", "nextest", "test-efficiency"]
+tests = [
+  "python3 -m unittest scripts/test_capability_test_plan.py",
+  "python3 scripts/capability_test_plan.py check",
+  "ruff check scripts/capability_test_plan.py scripts/test_capability_test_plan.py",
+  "taplo check test-capabilities.toml",
+  "cargo nextest list -p codex-core unified_exec -E <partition> -T oneline",
+]
