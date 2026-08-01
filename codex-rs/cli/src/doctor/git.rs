@@ -25,6 +25,7 @@ struct GitCheckInputs {
     repo_root: Option<PathBuf>,
     git_entry: Option<String>,
     branch: Option<String>,
+    worktree_status: Option<String>,
     core_fsmonitor: Option<String>,
 }
 
@@ -33,18 +34,26 @@ pub(super) async fn git_check(cwd: &Path) -> DoctorCheck {
     let git_candidates = git_candidates();
     let repo_root = get_git_repo_root(cwd);
 
-    let (git_version, git_exec_path, git_build_options, branch, core_fsmonitor) =
+    let (git_version, git_exec_path, git_build_options, branch, worktree_status, core_fsmonitor) =
         if let Some(git_path) = selected_git.as_deref() {
-            let (version, exec_path, build_options, branch, fsmonitor) = tokio::join!(
+            let (version, exec_path, build_options, branch, worktree_status, fsmonitor) = tokio::join!(
                 git_output(git_path, cwd, &["--version"]),
                 git_output(git_path, cwd, &["--exec-path"]),
                 git_output(git_path, cwd, &["version", "--build-options"]),
                 git_output(git_path, cwd, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                git_worktree_status(git_path, cwd),
                 git_output(git_path, cwd, &["config", "--get", "core.fsmonitor"]),
             );
-            (version, exec_path, build_options, branch, fsmonitor)
+            (
+                version,
+                exec_path,
+                build_options,
+                branch,
+                worktree_status,
+                fsmonitor,
+            )
         } else {
-            (None, None, None, None, None)
+            (None, None, None, None, None, None)
         };
 
     git_check_from_inputs(GitCheckInputs {
@@ -56,6 +65,7 @@ pub(super) async fn git_check(cwd: &Path) -> DoctorCheck {
         git_entry: repo_root.as_deref().map(git_entry_summary),
         repo_root,
         branch,
+        worktree_status,
         core_fsmonitor,
     })
 }
@@ -93,6 +103,11 @@ fn git_check_from_inputs(inputs: GitCheckInputs) -> DoctorCheck {
         &mut details,
         "git branch",
         normalized_branch(inputs.branch.as_deref()),
+    );
+    push_optional_detail(
+        &mut details,
+        "git worktree",
+        inputs.worktree_status.as_deref(),
     );
     push_optional_detail(
         &mut details,
@@ -203,6 +218,33 @@ async fn git_output(git_path: &Path, cwd: &Path, args: &[&str]) -> Option<String
         .ok()?
         .ok()?;
     command_output_text(output)
+}
+
+async fn git_worktree_status(git_path: &Path, cwd: &Path) -> Option<String> {
+    let mut command = Command::new(git_path);
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["status", "--porcelain=v1", "-uno"])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    let output = timeout(GIT_COMMAND_TIMEOUT, command.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(summarize_worktree_status(&output.stdout))
+}
+
+fn summarize_worktree_status(output: &[u8]) -> String {
+    let changed_paths = String::from_utf8_lossy(output).lines().count();
+    if changed_paths == 0 {
+        "clean".to_string()
+    } else {
+        format!("dirty ({changed_paths} tracked paths)")
+    }
 }
 
 fn command_output_text(output: Output) -> Option<String> {
@@ -368,6 +410,7 @@ mod tests {
             repo_root: Some(PathBuf::from("/repo")),
             git_entry: Some("directory".to_string()),
             branch: Some("main".to_string()),
+            worktree_status: Some("dirty (2 tracked paths)".to_string()),
             core_fsmonitor: Some("false".to_string()),
             ..GitCheckInputs::default()
         });
@@ -375,6 +418,20 @@ mod tests {
         assert_eq!(check.status, CheckStatus::Ok);
         assert!(check.details.contains(&"PATH git entries: 2".to_string()));
         assert!(check.details.contains(&"git branch: main".to_string()));
+        assert!(
+            check
+                .details
+                .contains(&"git worktree: dirty (2 tracked paths)".to_string())
+        );
         assert!(check.details.contains(&"core.fsmonitor: false".to_string()));
+    }
+
+    #[test]
+    fn summarizes_clean_and_dirty_worktrees() {
+        assert_eq!(summarize_worktree_status(b""), "clean");
+        assert_eq!(
+            summarize_worktree_status(b" M tracked.rs\nMM other.rs\n"),
+            "dirty (2 tracked paths)"
+        );
     }
 }

@@ -26,7 +26,15 @@ const GROUPS: &[OutputGroup] = &[
     OutputGroup {
         title: "Environment",
         keys: &[
-            "system", "runtime", "install", "search", "git", "terminal", "title", "state",
+            "system",
+            "runtime",
+            "install",
+            "search",
+            "preflight",
+            "git",
+            "terminal",
+            "title",
+            "state",
             "threads",
         ],
     },
@@ -1373,6 +1381,28 @@ Run codex doctor without --summary for detailed diagnostics.
         assert!(
             threads_line.contains("rollout files and state DB thread inventory differ"),
             "{threads_line}"
+        );
+    }
+
+    #[test]
+    fn render_human_report_includes_preflight_row_in_environment() {
+        let mut report = sample_report();
+        report.checks.push(DoctorCheck::new(
+            "preflight.execution",
+            "preflight",
+            CheckStatus::Ok,
+            "local execution capabilities are ready",
+        ));
+
+        let rendered = render_human_report(&report, summary_no_color_unicode_options());
+
+        let preflight_line = rendered
+            .lines()
+            .find(|line| line.contains("preflight"))
+            .expect("preflight row should be rendered");
+        assert!(
+            preflight_line.contains("local execution capabilities are ready"),
+            "{preflight_line}"
         );
     }
 

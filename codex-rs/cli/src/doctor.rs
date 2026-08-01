@@ -70,6 +70,7 @@ use supports_color::Stream;
 mod background;
 mod git;
 mod output;
+mod preflight;
 mod progress;
 mod runtime;
 mod system;
@@ -82,6 +83,7 @@ use git::git_check;
 use output::HumanOutputOptions;
 use output::redact_detail;
 use output::render_human_report;
+use preflight::execution_preflight_check;
 use progress::DoctorProgress;
 use progress::doctor_progress;
 use runtime::runtime_check;
@@ -146,10 +148,14 @@ const NARROW_TERMINAL_ROWS: u16 = 24;
 
 /// Options for building a local Codex diagnostic report.
 ///
-/// The command always runs the full bounded diagnostic set. Human output includes
-/// detailed diagnostics by default; --summary keeps the terminal output compact.
+/// Human output includes detailed diagnostics by default; --summary keeps the
+/// terminal output compact. --preflight restricts checks to local prerequisites.
 #[derive(Debug, Parser)]
 pub struct DoctorCommand {
+    /// Run only deterministic local checks before starting an expensive turn.
+    #[arg(long, default_value_t = false)]
+    preflight: bool,
+
     /// Emit a redacted machine-readable report.
     #[arg(long, default_value_t = false)]
     json: bool,
@@ -351,6 +357,32 @@ async fn build_report(
     let config_result = load_config(root_config_overrides, interactive, arg0_paths).await;
     match &config_result {
         Ok(config) => {
+            if command.preflight {
+                let (config_check, execution_check, sandbox_check, git_check, state_check) = tokio::join!(
+                    async { run_sync_check("config", progress.clone(), || config_check(config)) },
+                    async {
+                        run_sync_check("execution preflight", progress.clone(), || {
+                            execution_preflight_check(config.cwd.as_path(), &config.codex_home)
+                        })
+                    },
+                    async {
+                        run_sync_check("sandbox", progress.clone(), || {
+                            sandbox_check(config, arg0_paths)
+                        })
+                    },
+                    run_async_check("git", progress.clone(), git_check(config.cwd.as_path())),
+                    run_async_check("state", progress.clone(), state_check(config)),
+                );
+                checks.extend([
+                    config_check,
+                    execution_check,
+                    sandbox_check,
+                    git_check,
+                    state_check,
+                ]);
+                progress.settle();
+                return finish_report(checks);
+            }
             let auth_manager =
                 AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
             let reachability_plan = provider_reachability_plan(config);
@@ -431,11 +463,31 @@ async fn build_report(
             ]);
         }
         Err(err) => {
-            let reachability_plan = default_reachability_plan();
             let fallback_cwd = interactive
                 .cwd
                 .clone()
                 .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            if command.preflight {
+                let fallback_codex_home = find_codex_home()
+                    .map(|path| path.to_path_buf())
+                    .unwrap_or_else(|_| PathBuf::from("."));
+                let (config_check, execution_check, git_check, state_check) = tokio::join!(
+                    async {
+                        run_sync_check("config", progress.clone(), || failed_config_check(err))
+                    },
+                    async {
+                        run_sync_check("execution preflight", progress.clone(), || {
+                            execution_preflight_check(&fallback_cwd, &fallback_codex_home)
+                        })
+                    },
+                    run_async_check("git", progress.clone(), git_check(&fallback_cwd)),
+                    async { run_sync_check("state", progress.clone(), fallback_state_check) },
+                );
+                checks.extend([config_check, execution_check, git_check, state_check]);
+                progress.settle();
+                return finish_report(checks);
+            }
+            let reachability_plan = default_reachability_plan();
             let (
                 config_check,
                 network_check,
@@ -445,16 +497,7 @@ async fn build_report(
                 reachability_check,
             ) = tokio::join!(
                 async {
-                    run_sync_check("config", progress.clone(), || {
-                        DoctorCheck::new(
-                            "config.load",
-                            "config",
-                            CheckStatus::Fail,
-                            "config could not be loaded",
-                        )
-                        .detail(err.to_string())
-                        .remediation("Fix the reported config error, then rerun codex doctor.")
-                    })
+                    run_sync_check("config", progress.clone(), || failed_config_check(err))
                 },
                 async { run_sync_check("network", progress.clone(), network_check) },
                 async {
@@ -483,6 +526,10 @@ async fn build_report(
 
     progress.settle();
 
+    finish_report(checks)
+}
+
+fn finish_report(checks: Vec<DoctorCheck>) -> DoctorReport {
     let overall_status = overall_status(&checks);
     DoctorReport {
         schema_version: 1,
@@ -491,6 +538,17 @@ async fn build_report(
         codex_version: CODEX_CLI_VERSION.to_string(),
         checks,
     }
+}
+
+fn failed_config_check(error: &anyhow::Error) -> DoctorCheck {
+    DoctorCheck::new(
+        "config.load",
+        "config",
+        CheckStatus::Fail,
+        "config could not be loaded",
+    )
+    .detail(error.to_string())
+    .remediation("Fix the reported config error, then rerun codex doctor.")
 }
 
 async fn load_config(
