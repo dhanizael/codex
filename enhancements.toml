@@ -61,3 +61,17 @@ tests = [
   "cargo metadata --locked --format-version 1",
   "just bazel-lock-check",
 ]
+
+[[enhancements]]
+id = "file-backed-unified-exec-output"
+title = "Preserve complete unified exec output in private files"
+kind = "enhancement"
+commits = ["6fe7775f8c0d921414cbed9f8211d7cfd641dc7f"]
+areas = ["context", "tools", "unified-exec"]
+tests = [
+  "just test -p codex-core output_spill",
+  "just test -p codex-core streaming_output_spill",
+  "just test -p codex-core exec_command_tool_output_references_full_output_only_when_truncated",
+  "just test -p codex-core unified_exec",
+  "just fix -p codex-core",
+]
