@@ -3004,19 +3004,27 @@ async fn model_instruction_files_load_exact_slug_contents() -> std::io::Result<(
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
+    let sol_contents = "  sol instructions  ";
+    let sol_sha256 = codex_config::sha256_hex(sol_contents.as_bytes());
     tokio::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
-        r#"
+        format!(
+            r#"
 [model_instruction_files]
 "gpt-5.6-sol" = "sol.md"
 "provider/gpt-5.6-terra" = "terra.md"
 
 [model_instruction_replacement_files]
 "gpt-5.6-luna" = "luna.md"
-"#,
+
+[model_instruction_file_guards."gpt-5.6-sol"]
+version = "1"
+sha256 = "{sol_sha256}"
+"#
+        ),
     )
     .await?;
-    tokio::fs::write(codex_home.join("sol.md"), "  sol instructions  ").await?;
+    tokio::fs::write(codex_home.join("sol.md"), sol_contents).await?;
     tokio::fs::write(codex_home.join("terra.md"), "terra instructions").await?;
     tokio::fs::write(codex_home.join("luna.md"), "luna replacement").await?;
 
@@ -3039,6 +3047,78 @@ async fn model_instruction_files_load_exact_slug_contents() -> std::io::Result<(
         config.model_instruction_replacement_files,
         BTreeMap::from([("gpt-5.6-luna".to_string(), "luna replacement".to_string())])
     );
+    assert!(config.model_instruction_files_enabled);
+    assert_eq!(
+        config.model_instruction_file_guards,
+        BTreeMap::from([(
+            "gpt-5.6-sol".to_string(),
+            codex_config::config_toml::ModelInstructionFileGuard {
+                version: "1".to_string(),
+                sha256: sol_sha256,
+            },
+        )])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_instruction_file_guard_fails_closed_on_content_change() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[model_instruction_files]
+"gpt-5.6-sol" = "sol.md"
+
+[model_instruction_file_guards."gpt-5.6-sol"]
+version = "1"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+"#,
+    )
+    .await?;
+    tokio::fs::write(codex_home.join("sol.md"), "changed instructions").await?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await
+        .expect_err("changed guarded instructions must fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("SHA-256 guard mismatch"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_model_instruction_files_fall_back_without_reading_files() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+model_instruction_files_enabled = false
+
+[model_instruction_files]
+"gpt-5.6-sol" = "missing.md"
+
+[model_instruction_file_guards."gpt-5.6-sol"]
+version = "emergency fallback bypasses validation"
+sha256 = "not-read-while-disabled"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await?;
+
+    assert!(!config.model_instruction_files_enabled);
+    assert_eq!(config.model_instruction_files, BTreeMap::new());
+    assert_eq!(config.model_instruction_replacement_files, BTreeMap::new());
     Ok(())
 }
 

@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::config_toml::ModelInstructionFileGuard;
 use crate::config_toml::ToolsToml;
 use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
@@ -44,12 +45,15 @@ pub struct ConfigProfile {
     pub chatgpt_base_url: Option<String>,
     /// Optional path to a file containing model instructions.
     pub model_instructions_file: Option<AbsolutePathBuf>,
+    pub model_instruction_files_enabled: Option<bool>,
     /// Exact model slug to instruction augmentation files.
     #[serde(default)]
     pub model_instruction_files: BTreeMap<String, AbsolutePathBuf>,
     /// Exact model slug to full instruction replacement files.
     #[serde(default)]
     pub model_instruction_replacement_files: BTreeMap<String, AbsolutePathBuf>,
+    #[serde(default)]
+    pub model_instruction_file_guards: BTreeMap<String, ModelInstructionFileGuard>,
     /// Deprecated: ignored.
     #[schemars(skip)]
     pub js_repl_node_path: Option<AbsolutePathBuf>,

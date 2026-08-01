@@ -219,6 +219,8 @@ fn drop_lockfile_inputs(lock_config: &mut ConfigToml) {
     lock_config.model_instructions_file = None;
     lock_config.model_instruction_files.clear();
     lock_config.model_instruction_replacement_files.clear();
+    lock_config.model_instruction_files_enabled = None;
+    lock_config.model_instruction_file_guards.clear();
     lock_config.experimental_compact_prompt_file = None;
     lock_config.model_catalog_json = None;
     lock_config.sandbox_mode = None;
@@ -283,6 +285,14 @@ mod tests {
                 )
                 .expect("absolute path"),
             )]),
+            model_instruction_files_enabled: Some(true),
+            model_instruction_file_guards: BTreeMap::from([(
+                "gpt-5.6-sol".to_string(),
+                codex_config::config_toml::ModelInstructionFileGuard {
+                    version: "1".to_string(),
+                    sha256: "0".repeat(64),
+                },
+            )]),
             ..ConfigToml::default()
         };
 
@@ -291,6 +301,8 @@ mod tests {
         assert_eq!(config.model_instructions_file, None);
         assert_eq!(config.model_instruction_files, BTreeMap::new());
         assert_eq!(config.model_instruction_replacement_files, BTreeMap::new());
+        assert_eq!(config.model_instruction_files_enabled, None);
+        assert_eq!(config.model_instruction_file_guards, BTreeMap::new());
     }
 
     #[tokio::test]

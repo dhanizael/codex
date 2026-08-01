@@ -1098,6 +1098,25 @@ fn config_check(config: &Config) -> DoctorCheck {
             .unwrap_or("<model default>")
     ));
     details.push(format!("model provider: {}", config.model_provider_id));
+    let active_instruction_file_count =
+        config.model_instruction_files.len() + config.model_instruction_replacement_files.len();
+    details.push(if config.model_instruction_files_enabled {
+        format!(
+            "model instruction tuning: enabled ({active_instruction_file_count} active, {} guarded)",
+            config.model_instruction_file_guards.len()
+        )
+    } else {
+        "model instruction tuning: disabled (native instructions only)".to_string()
+    });
+    if config.model_instruction_files_enabled {
+        for (model_slug, guard) in &config.model_instruction_file_guards {
+            details.push(format!(
+                "model instruction guard: {model_slug} version {} sha256 {}",
+                guard.version,
+                guard.sha256.chars().take(12).collect::<String>()
+            ));
+        }
+    }
     details.push(format!("log dir: {}", config.log_dir.display()));
     details.push(format!(
         "sqlite home: {}",

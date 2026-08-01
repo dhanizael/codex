@@ -235,6 +235,11 @@ pub struct ConfigToml {
     /// sanctioned by Codex will likely degrade model performance.
     pub model_instructions_file: Option<AbsolutePathBuf>,
 
+    /// Global emergency switch for exact-model instruction files. Defaults to
+    /// enabled; disabling it preserves configuration while using native model
+    /// instructions only.
+    pub model_instruction_files_enabled: Option<bool>,
+
     /// Exact model slug to instruction augmentation files. These are appended
     /// to model catalog instructions without replacing native behavior.
     #[serde(default)]
@@ -244,6 +249,11 @@ pub struct ConfigToml {
     /// escape hatch replaces catalog instructions for the matching model.
     #[serde(default)]
     pub model_instruction_replacement_files: BTreeMap<String, AbsolutePathBuf>,
+
+    /// Optional integrity metadata keyed by exact model slug. Guarded files
+    /// fail closed when their SHA-256 digest changes.
+    #[serde(default)]
+    pub model_instruction_file_guards: BTreeMap<String, ModelInstructionFileGuard>,
 
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
@@ -518,6 +528,13 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelInstructionFileGuard {
+    pub version: String,
+    pub sha256: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

@@ -24,6 +24,7 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::ModelInstructionFileGuard;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -718,6 +719,12 @@ pub struct Config {
 
     /// Validated full instruction replacements keyed by exact model slug.
     pub model_instruction_replacement_files: BTreeMap<String, String>,
+
+    /// Whether exact-model instruction files are active for this session.
+    pub model_instruction_files_enabled: bool,
+
+    /// Validated integrity metadata for configured exact-model instruction files.
+    pub model_instruction_file_guards: BTreeMap<String, ModelInstructionFileGuard>,
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
@@ -3846,11 +3853,14 @@ impl Config {
         let base_instructions = base_instructions
             .or(file_base_instructions)
             .or(cfg.instructions.clone());
+        let model_instruction_files_enabled = cfg.model_instruction_files_enabled.unwrap_or(true);
         let (model_instruction_files, model_instruction_replacement_files) =
             Self::read_model_instruction_files(
                 fs,
                 &cfg.model_instruction_files,
                 &cfg.model_instruction_replacement_files,
+                &cfg.model_instruction_file_guards,
+                model_instruction_files_enabled,
             )
             .await?;
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
@@ -4061,6 +4071,8 @@ impl Config {
             base_instructions,
             model_instruction_files,
             model_instruction_replacement_files,
+            model_instruction_files_enabled,
+            model_instruction_file_guards: cfg.model_instruction_file_guards,
             personality,
             developer_instructions,
             compact_prompt,
@@ -4312,7 +4324,12 @@ impl Config {
         fs: &dyn ExecutorFileSystem,
         augmentations: &BTreeMap<String, AbsolutePathBuf>,
         replacements: &BTreeMap<String, AbsolutePathBuf>,
+        guards: &BTreeMap<String, ModelInstructionFileGuard>,
+        enabled: bool,
     ) -> std::io::Result<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+        if !enabled {
+            return Ok((BTreeMap::new(), BTreeMap::new()));
+        }
         if let Some(model_slug) = augmentations
             .keys()
             .find(|model_slug| replacements.contains_key(*model_slug))
@@ -4324,16 +4341,28 @@ impl Config {
                 ),
             ));
         }
+        if let Some(model_slug) = guards.keys().find(|model_slug| {
+            !augmentations.contains_key(*model_slug) && !replacements.contains_key(*model_slug)
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "model_instruction_file_guards entry for {model_slug:?} has no matching instruction file"
+                ),
+            ));
+        }
 
         let augmentations = Self::read_model_instruction_file_map(
             fs,
             augmentations,
+            guards,
             ModelInstructionFileKind::Augmentation,
         )
         .await?;
         let replacements = Self::read_model_instruction_file_map(
             fs,
             replacements,
+            guards,
             ModelInstructionFileKind::Replacement,
         )
         .await?;
@@ -4343,6 +4372,7 @@ impl Config {
     async fn read_model_instruction_file_map(
         fs: &dyn ExecutorFileSystem,
         files: &BTreeMap<String, AbsolutePathBuf>,
+        guards: &BTreeMap<String, ModelInstructionFileGuard>,
         kind: ModelInstructionFileKind,
     ) -> std::io::Result<BTreeMap<String, String>> {
         let mut instructions = BTreeMap::new();
@@ -4362,9 +4392,60 @@ impl Config {
             }
 
             let context = format!("{} entry for {model_slug}", kind.config_key());
-            let contents = Self::try_read_non_empty_file(fs, Some(path), &context)
-                .await?
-                .ok_or_else(|| std::io::Error::other(format!("{context} path was not provided")))?;
+            let path_uri = PathUri::from_abs_path(path);
+            let raw_contents = fs
+                .read_file_text(&path_uri, /*sandbox*/ None)
+                .await
+                .map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!("failed to read {context} {}: {error}", path.display()),
+                    )
+                })?;
+            let contents = raw_contents.trim().to_string();
+            if contents.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{context} is empty: {}", path.display()),
+                ));
+            }
+            if let Some(guard) = guards.get(model_slug) {
+                if guard.version.is_empty()
+                    || guard.version.trim() != guard.version
+                    || guard.version.len() > 64
+                    || guard.version.chars().any(char::is_control)
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "invalid tuning version for {model_slug:?}: {:?}",
+                            guard.version
+                        ),
+                    ));
+                }
+                if guard.sha256.len() != 64
+                    || !guard.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "invalid SHA-256 guard for {model_slug:?}: {:?}",
+                            guard.sha256
+                        ),
+                    ));
+                }
+                let actual_sha256 = codex_config::sha256_hex(raw_contents.as_bytes());
+                if !guard.sha256.eq_ignore_ascii_case(&actual_sha256) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "SHA-256 guard mismatch for {model_slug:?}: expected {}, got {actual_sha256} ({})",
+                            guard.sha256,
+                            path.display()
+                        ),
+                    ));
+                }
+            }
             let (max_bytes, max_tokens) = kind.limits();
             if contents.len() > max_bytes || approx_token_count(&contents) > max_tokens {
                 return Err(std::io::Error::new(

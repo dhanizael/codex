@@ -48,6 +48,10 @@ pub fn version_for_toml(value: &TomlValue) -> String {
     format!("sha256:{hex}")
 }
 
+pub fn sha256_hex(input: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(input))
+}
+
 fn canonical_json(value: &JsonValue) -> JsonValue {
     match value {
         JsonValue::Object(map) => {

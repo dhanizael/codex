@@ -794,6 +794,13 @@
           ],
           "description": "Optional path to a JSON model catalog (applied on startup only)."
         },
+        "model_instruction_file_guards": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelInstructionFileGuard"
+          },
+          "default": {},
+          "type": "object"
+        },
         "model_instruction_files": {
           "additionalProperties": {
             "$ref": "#/definitions/AbsolutePathBuf"
@@ -801,6 +808,9 @@
           "default": {},
           "description": "Exact model slug to instruction augmentation files.",
           "type": "object"
+        },
+        "model_instruction_files_enabled": {
+          "type": "boolean"
         },
         "model_instruction_replacement_files": {
           "additionalProperties": {
@@ -1648,6 +1658,22 @@
         "minimum": 0.0,
         "type": "integer"
       },
+      "type": "object"
+    },
+    "ModelInstructionFileGuard": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "version"
+      ],
       "type": "object"
     },
     "ModelProviderAuthInfo": {
@@ -5509,6 +5535,14 @@
       "format": "int64",
       "type": "integer"
     },
+    "model_instruction_file_guards": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelInstructionFileGuard"
+      },
+      "default": {},
+      "description": "Optional integrity metadata keyed by exact model slug. Guarded files fail closed when their SHA-256 digest changes.",
+      "type": "object"
+    },
     "model_instruction_files": {
       "additionalProperties": {
         "$ref": "#/definitions/AbsolutePathBuf"
@@ -5516,6 +5550,10 @@
       "default": {},
       "description": "Exact model slug to instruction augmentation files. These are appended to model catalog instructions without replacing native behavior.",
       "type": "object"
+    },
+    "model_instruction_files_enabled": {
+      "description": "Global emergency switch for exact-model instruction files. Defaults to enabled; disabling it preserves configuration while using native model instructions only.",
+      "type": "boolean"
     },
     "model_instruction_replacement_files": {
       "additionalProperties": {
