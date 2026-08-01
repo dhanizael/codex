@@ -89,3 +89,15 @@ tests = [
   "taplo check test-capabilities.toml",
   "cargo nextest list -p codex-core unified_exec -E <partition> -T oneline",
 ]
+
+[[enhancements]]
+id = "bounded-unified-exec-output-retention"
+title = "Bound unified exec output retention"
+kind = "enhancement"
+commits = ["c4303721f620e9a6f6feb58949f4f34ba581a563"]
+areas = ["cleanup", "storage", "unified-exec"]
+tests = [
+  "just test -p codex-core output_cleanup -E <sandbox-safe-partition>",
+  "just test -p codex-core output_spill -E <sandbox-safe-partition>",
+  "just fix -p codex-core",
+]
