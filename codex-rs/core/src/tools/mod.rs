@@ -2,6 +2,7 @@ mod approvals;
 pub(crate) mod code_mode;
 pub(crate) mod context;
 pub(crate) mod events;
+mod exec_output_processing;
 pub(crate) mod handlers;
 pub(crate) mod hook_names;
 pub(crate) mod hosted_spec;

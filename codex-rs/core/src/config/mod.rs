@@ -114,6 +114,7 @@ use codex_protocol::protocol::SandboxPolicy;
 pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
@@ -204,6 +205,39 @@ impl Default for GhostSnapshotConfig {
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const AGENTS_MD_MAX_BYTES: usize = DEFAULT_PROJECT_DOC_MAX_BYTES; // 32 KiB
+const MODEL_INSTRUCTION_FILE_MAX_BYTES: usize = 40_000;
+const MODEL_INSTRUCTION_FILE_MAX_TOKENS: usize = 10_000;
+const MODEL_INSTRUCTION_AUGMENTATION_MAX_BYTES: usize = 4_000;
+const MODEL_INSTRUCTION_AUGMENTATION_MAX_TOKENS: usize = 1_000;
+const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+
+#[derive(Clone, Copy)]
+enum ModelInstructionFileKind {
+    Augmentation,
+    Replacement,
+}
+
+impl ModelInstructionFileKind {
+    fn config_key(self) -> &'static str {
+        match self {
+            Self::Augmentation => "model_instruction_files",
+            Self::Replacement => "model_instruction_replacement_files",
+        }
+    }
+
+    fn limits(self) -> (usize, usize) {
+        match self {
+            Self::Augmentation => (
+                MODEL_INSTRUCTION_AUGMENTATION_MAX_BYTES,
+                MODEL_INSTRUCTION_AUGMENTATION_MAX_TOKENS,
+            ),
+            Self::Replacement => (
+                MODEL_INSTRUCTION_FILE_MAX_BYTES,
+                MODEL_INSTRUCTION_FILE_MAX_TOKENS,
+            ),
+        }
+    }
+}
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -678,6 +712,12 @@ pub struct Config {
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
+
+    /// Validated native-preserving instruction augmentations keyed by exact model slug.
+    pub model_instruction_files: BTreeMap<String, String>,
+
+    /// Validated full instruction replacements keyed by exact model slug.
+    pub model_instruction_replacement_files: BTreeMap<String, String>,
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
@@ -1519,6 +1559,8 @@ impl Config {
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
             tool_output_token_limit: self.tool_output_token_limit,
             base_instructions: self.base_instructions.clone(),
+            model_instruction_files: self.model_instruction_files.clone(),
+            model_instruction_replacement_files: self.model_instruction_replacement_files.clone(),
             personality_enabled: self.features.enabled(Feature::Personality),
             personality: self.personality,
             model_catalog: self.model_catalog.clone(),
@@ -3804,6 +3846,13 @@ impl Config {
         let base_instructions = base_instructions
             .or(file_base_instructions)
             .or(cfg.instructions.clone());
+        let (model_instruction_files, model_instruction_replacement_files) =
+            Self::read_model_instruction_files(
+                fs,
+                &cfg.model_instruction_files,
+                &cfg.model_instruction_replacement_files,
+            )
+            .await?;
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let include_permissions_instructions = cfg.include_permissions_instructions.unwrap_or(true);
         let include_apps_instructions = cfg.include_apps_instructions.unwrap_or(true);
@@ -4010,6 +4059,8 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             base_instructions,
+            model_instruction_files,
+            model_instruction_replacement_files,
             personality,
             developer_instructions,
             compact_prompt,
@@ -4255,6 +4306,89 @@ impl Config {
         } else {
             Ok(Some(s))
         }
+    }
+
+    async fn read_model_instruction_files(
+        fs: &dyn ExecutorFileSystem,
+        augmentations: &BTreeMap<String, AbsolutePathBuf>,
+        replacements: &BTreeMap<String, AbsolutePathBuf>,
+    ) -> std::io::Result<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+        if let Some(model_slug) = augmentations
+            .keys()
+            .find(|model_slug| replacements.contains_key(*model_slug))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "model {model_slug:?} is configured in both model_instruction_files and model_instruction_replacement_files"
+                ),
+            ));
+        }
+
+        let augmentations = Self::read_model_instruction_file_map(
+            fs,
+            augmentations,
+            ModelInstructionFileKind::Augmentation,
+        )
+        .await?;
+        let replacements = Self::read_model_instruction_file_map(
+            fs,
+            replacements,
+            ModelInstructionFileKind::Replacement,
+        )
+        .await?;
+        Ok((augmentations, replacements))
+    }
+
+    async fn read_model_instruction_file_map(
+        fs: &dyn ExecutorFileSystem,
+        files: &BTreeMap<String, AbsolutePathBuf>,
+        kind: ModelInstructionFileKind,
+    ) -> std::io::Result<BTreeMap<String, String>> {
+        let mut instructions = BTreeMap::new();
+        for (model_slug, path) in files {
+            if model_slug.is_empty()
+                || model_slug.trim() != model_slug
+                || model_slug.chars().any(char::is_whitespace)
+                || model_slug.chars().any(char::is_control)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "invalid exact model slug in {}: {model_slug:?}",
+                        kind.config_key()
+                    ),
+                ));
+            }
+
+            let context = format!("{} entry for {model_slug}", kind.config_key());
+            let contents = Self::try_read_non_empty_file(fs, Some(path), &context)
+                .await?
+                .ok_or_else(|| std::io::Error::other(format!("{context} path was not provided")))?;
+            let (max_bytes, max_tokens) = kind.limits();
+            if contents.len() > max_bytes || approx_token_count(&contents) > max_tokens {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "{context} exceeds the {max_bytes}-byte or {max_tokens}-token limit: {}",
+                        path.display()
+                    ),
+                ));
+            }
+            if matches!(kind, ModelInstructionFileKind::Augmentation)
+                && contents.contains(PERSONALITY_PLACEHOLDER)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "{context} contains reserved personality placeholder {PERSONALITY_PLACEHOLDER:?}: {}",
+                        path.display()
+                    ),
+                ));
+            }
+            instructions.insert(model_slug.clone(), contents);
+        }
+        Ok(instructions)
     }
 
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {

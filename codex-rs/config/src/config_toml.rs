@@ -235,6 +235,16 @@ pub struct ConfigToml {
     /// sanctioned by Codex will likely degrade model performance.
     pub model_instructions_file: Option<AbsolutePathBuf>,
 
+    /// Exact model slug to instruction augmentation files. These are appended
+    /// to model catalog instructions without replacing native behavior.
+    #[serde(default)]
+    pub model_instruction_files: BTreeMap<String, AbsolutePathBuf>,
+
+    /// Exact model slug to full instruction replacement files. This advanced
+    /// escape hatch replaces catalog instructions for the matching model.
+    #[serde(default)]
+    pub model_instruction_replacement_files: BTreeMap<String, AbsolutePathBuf>,
+
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 

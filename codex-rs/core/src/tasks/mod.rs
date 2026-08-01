@@ -414,15 +414,6 @@ impl Session {
                 let sess = session_ctx.clone_session();
                 if let Err(err) = sess.flush_rollout().await {
                     warn!("failed to flush rollout before completing turn: {err}");
-                    sess.send_event(
-                        ctx_for_finish.as_ref(),
-                        EventMsg::Warning(WarningEvent {
-                            message: format!(
-                                "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
-                            ),
-                        }),
-                    )
-                    .await;
                 }
                 if !task_cancellation_token.is_cancelled() {
                     // Finish uniformly from the spawn site so all tasks share the same lifecycle.
@@ -836,6 +827,15 @@ impl Session {
         // thread writers may not flush it without another explicit barrier.
         if let Err(err) = self.flush_rollout().await {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
+            self.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Failed to save the completed turn to the conversation transcript. The turn remains available in this session, but may be lost if Codex exits before persistence recovers. Error: {err}"
+                    ),
+                }),
+            )
+            .await;
         }
         if cleared_active_turn {
             self.maybe_start_turn_for_pending_work().await;
@@ -949,6 +949,15 @@ impl Session {
         // thread writers may not flush it without another explicit barrier.
         if let Err(err) = self.flush_rollout().await {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
+            self.send_event(
+                task.turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Failed to save the interrupted turn to the conversation transcript. The turn remains available in this session, but may be lost if Codex exits before persistence recovers. Error: {err}"
+                    ),
+                }),
+            )
+            .await;
         }
     }
 }

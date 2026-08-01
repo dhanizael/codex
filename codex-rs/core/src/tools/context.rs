@@ -6,9 +6,11 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
+use crate::tools::exec_output_processing::prepare_model_output;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::unified_exec::DEFAULT_MAX_ERROR_OUTPUT_TOKENS;
+use crate::unified_exec::DEFAULT_MAX_OUTPUT_TOKENS;
 use crate::unified_exec::format_output_omission_marker;
-use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -407,11 +409,20 @@ impl ToolOutput for ExecCommandToolOutput {
 
 impl ExecCommandToolOutput {
     fn model_output_max_tokens(&self) -> usize {
-        resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
+        let max_tokens = match (self.max_output_tokens, self.exit_code) {
+            (Some(max_tokens), _) => max_tokens,
+            (None, Some(exit_code)) if exit_code != 0 => DEFAULT_MAX_ERROR_OUTPUT_TOKENS,
+            (None, Some(_) | None) => DEFAULT_MAX_OUTPUT_TOKENS,
+        };
+        max_tokens.min(self.truncation_policy.token_budget())
     }
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
-        let text = String::from_utf8_lossy(&self.raw_output).to_string();
+        let text = prepare_model_output(
+            &String::from_utf8_lossy(&self.raw_output),
+            self.exit_code.is_some_and(|exit_code| exit_code != 0),
+            max_tokens,
+        );
         let policy = TruncationPolicy::Tokens(max_tokens);
         let Some(omitted_bytes) = self.output_omitted_bytes else {
             return formatted_truncate_text(&text, policy);

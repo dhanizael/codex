@@ -603,7 +603,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow::Result<()> {
+async fn exact_file_augmentation_preserves_remote_metadata_and_personality() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::builder()
@@ -614,6 +614,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let remote_slug = "codex-remote-default-personality";
     let default_personality_message = "Default from remote template";
     let friendly_personality_message = "Friendly variant";
+    let file_instructions = "Instructions from exact model file";
     let remote_model = ModelInfo {
         slug: remote_slug.to_string(),
         display_name: "Remote default personality test".to_string(),
@@ -681,13 +682,16 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
 
     let mut builder = test_codex()
         .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::Personality)
                 .expect("test config should allow feature update");
             config.model = Some(remote_slug.to_string());
             config.personality = Some(Personality::Friendly);
+            config
+                .model_instruction_files
+                .insert(remote_slug.to_string(), file_instructions.to_string());
         });
     let test = builder.build(&server).await?;
 
@@ -708,6 +712,14 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let request = resp_mock.single_request();
     let instructions_text = request.instructions_text();
 
+    assert!(
+        instructions_text.contains(file_instructions),
+        "expected exact file override after remote metadata, got: {instructions_text:?}"
+    );
+    assert!(
+        instructions_text.contains("Base instructions"),
+        "expected exact file augmentation to retain the remote template, got: {instructions_text:?}"
+    );
     assert!(
         instructions_text.contains(friendly_personality_message),
         "expected instructions to include the remote friendly personality template, got: {instructions_text:?}"

@@ -3000,6 +3000,192 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
 }
 
 #[tokio::test]
+async fn model_instruction_files_load_exact_slug_contents() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[model_instruction_files]
+"gpt-5.6-sol" = "sol.md"
+"provider/gpt-5.6-terra" = "terra.md"
+
+[model_instruction_replacement_files]
+"gpt-5.6-luna" = "luna.md"
+"#,
+    )
+    .await?;
+    tokio::fs::write(codex_home.join("sol.md"), "  sol instructions  ").await?;
+    tokio::fs::write(codex_home.join("terra.md"), "terra instructions").await?;
+    tokio::fs::write(codex_home.join("luna.md"), "luna replacement").await?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.model_instruction_files,
+        BTreeMap::from([
+            ("gpt-5.6-sol".to_string(), "sol instructions".to_string()),
+            (
+                "provider/gpt-5.6-terra".to_string(),
+                "terra instructions".to_string(),
+            ),
+        ])
+    );
+    assert_eq!(
+        config.model_instruction_replacement_files,
+        BTreeMap::from([("gpt-5.6-luna".to_string(), "luna replacement".to_string())])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_instruction_files_fail_closed_for_invalid_slug() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[model_instruction_files]
+"gpt invalid" = "instructions.md"
+"#,
+    )
+    .await?;
+    tokio::fs::write(codex_home.join("instructions.md"), "instructions").await?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await
+        .expect_err("invalid exact slug must fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(err.to_string().contains("invalid exact model slug"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_instruction_files_fail_closed_for_missing_file() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[model_instruction_files]
+"gpt-5.6-sol" = "missing.md"
+"#,
+    )
+    .await?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await
+        .expect_err("missing model instruction file must fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        err.to_string()
+            .contains("model_instruction_files entry for gpt-5.6-sol")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_instruction_files_fail_closed_when_oversized() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[model_instruction_files]
+"gpt-5.6-sol" = "oversized.md"
+"#,
+    )
+    .await?;
+    tokio::fs::write(codex_home.join("oversized.md"), "x".repeat(4_001)).await?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await
+        .expect_err("oversized model instruction file must fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("exceeds the 4000-byte or 1000-token limit")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_instruction_files_reject_reserved_personality_placeholder() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[model_instruction_files]
+"gpt-5.6-sol" = "augmentation.md"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        codex_home.join("augmentation.md"),
+        "unsafe duplicate {{ personality }} placeholder",
+    )
+    .await?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await
+        .expect_err("augmentation personality placeholder must fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("reserved personality placeholder"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_instruction_files_reject_augmentation_replacement_conflict() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[model_instruction_files]
+"gpt-5.6-sol" = "augmentation.md"
+
+[model_instruction_replacement_files]
+"gpt-5.6-sol" = "replacement.md"
+"#,
+    )
+    .await?;
+    tokio::fs::write(codex_home.join("augmentation.md"), "augmentation").await?;
+    tokio::fs::write(codex_home.join("replacement.md"), "replacement").await?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await
+        .expect_err("same slug in augmentation and replacement must fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(err.to_string().contains("configured in both"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn inline_instructions_set_base_instructions() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");

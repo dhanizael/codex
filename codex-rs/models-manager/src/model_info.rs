@@ -53,6 +53,29 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         model.base_instructions = base_instructions.clone();
         clear_instruction_messages(&mut model);
     } else {
+        if let Some(model_instructions) =
+            config.model_instruction_replacement_files.get(&model.slug)
+        {
+            model.base_instructions = model_instructions.clone();
+            if let Some(model_messages) = &mut model.model_messages {
+                model_messages.instructions_template = Some(model_instructions.clone());
+            }
+        } else if let Some(augmentation) = config.model_instruction_files.get(&model.slug) {
+            model.base_instructions = append_instruction_augmentation(
+                std::mem::take(&mut model.base_instructions),
+                augmentation,
+            );
+            if let Some(instructions_template) = model
+                .model_messages
+                .as_mut()
+                .and_then(|messages| messages.instructions_template.as_mut())
+            {
+                *instructions_template = append_instruction_augmentation(
+                    std::mem::take(instructions_template),
+                    augmentation,
+                );
+            }
+        }
         if config.personality_enabled && config.personality == Some(Personality::None) {
             model.base_instructions = strip_personality_section(model.base_instructions);
             if let Some(instructions_template) = model
@@ -70,6 +93,17 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
     }
 
     model
+}
+
+fn append_instruction_augmentation(mut native: String, augmentation: &str) -> String {
+    if !native.is_empty() {
+        if !native.ends_with('\n') {
+            native.push('\n');
+        }
+        native.push('\n');
+    }
+    native.push_str(augmentation);
+    native
 }
 
 fn strip_personality_section(mut instructions: String) -> String {

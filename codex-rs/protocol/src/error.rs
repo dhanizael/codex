@@ -379,10 +379,14 @@ impl CodexErr {
             | CodexErrorDetails::UsageLimitReached(_)
             | CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::CyberPolicy { .. } => false,
+            CodexErrorDetails::UnexpectedStatus(error) => {
+                error.status == StatusCode::REQUEST_TIMEOUT
+                    || error.status == StatusCode::TOO_MANY_REQUESTS
+                    || error.status.is_server_error()
+            }
             CodexErrorDetails::Stream(..)
             | CodexErrorDetails::Timeout
             | CodexErrorDetails::RequestTimeout
-            | CodexErrorDetails::UnexpectedStatus(_)
             | CodexErrorDetails::ResponseStreamFailed(_)
             | CodexErrorDetails::ConnectionFailed(_)
             | CodexErrorDetails::InternalServerError
@@ -565,6 +569,11 @@ impl std::fmt::Display for UnexpectedResponseError {
         }
         if let Some(error_code) = &self.identity_error_code {
             message.push_str(&format!(", auth error code: {error_code}"));
+        }
+        if self.status == StatusCode::CONFLICT {
+            message.push_str(
+                ". The server rejected the request because its turn state no longer matches. Retry the turn once; if the conflict repeats, start a new session",
+            );
         }
         write!(f, "{message}")
     }

@@ -35,6 +35,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
+const CUSTOM_TOOL_OUTPUT_MAX_TOKENS: usize = 6_000;
+
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {
@@ -361,13 +363,23 @@ impl ContextManager {
                 name,
                 output,
                 internal_chat_message_metadata_passthrough: metadata,
-            } => ResponseItem::CustomToolCallOutput {
-                id: id.clone(),
-                call_id: call_id.clone(),
-                name: name.clone(),
-                output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                internal_chat_message_metadata_passthrough: metadata.clone(),
-            },
+            } => {
+                let custom_tool_policy = match policy {
+                    TruncationPolicy::Bytes(bytes) => TruncationPolicy::Bytes(
+                        bytes.min(approx_bytes_for_tokens(CUSTOM_TOOL_OUTPUT_MAX_TOKENS)),
+                    ),
+                    TruncationPolicy::Tokens(tokens) => {
+                        TruncationPolicy::Tokens(tokens.min(CUSTOM_TOOL_OUTPUT_MAX_TOKENS))
+                    }
+                } * 1.2;
+                ResponseItem::CustomToolCallOutput {
+                    id: id.clone(),
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    output: truncate_function_output_payload(output, custom_tool_policy),
+                    internal_chat_message_metadata_passthrough: metadata.clone(),
+                }
+            }
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }

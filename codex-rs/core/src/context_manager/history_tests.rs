@@ -1260,6 +1260,31 @@ fn record_items_truncates_custom_tool_call_output_content() {
 }
 
 #[test]
+fn record_items_caps_custom_tool_call_output_below_larger_history_policy() {
+    let mut history = ContextManager::new();
+    let long_output = "custom tool output line\n".repeat(10_000);
+    let item = ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "tool-capped-output".to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text(long_output.clone()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    history.record_items([&item], TruncationPolicy::Tokens(10_000));
+
+    let ResponseItem::CustomToolCallOutput { output, .. } = &history.items[0] else {
+        panic!("expected custom tool call output");
+    };
+    let output = output.text_content().unwrap_or_default();
+    assert_ne!(output, long_output);
+    assert!(output.contains("tokens truncated"));
+    let payload_budget =
+        (TruncationPolicy::Tokens(CUSTOM_TOOL_OUTPUT_MAX_TOKENS) * 1.2).token_budget();
+    assert!(approx_token_count(output) <= payload_budget.saturating_add(100));
+}
+
+#[test]
 fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);

@@ -58,6 +58,45 @@ fn retryability_preserves_error_details_distinctions() {
             }),
             true,
         ),
+        (
+            CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status: StatusCode::BAD_REQUEST,
+                body: String::new(),
+                user_message: None,
+                url: None,
+                cf_ray: None,
+                request_id: None,
+                identity_authorization_error: None,
+                identity_error_code: None,
+            }),
+            false,
+        ),
+        (
+            CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status: StatusCode::CONFLICT,
+                body: String::new(),
+                user_message: None,
+                url: None,
+                cf_ray: None,
+                request_id: None,
+                identity_authorization_error: None,
+                identity_error_code: None,
+            }),
+            false,
+        ),
+        (
+            CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                body: String::new(),
+                user_message: None,
+                url: None,
+                cf_ray: None,
+                request_id: None,
+                identity_authorization_error: None,
+                identity_error_code: None,
+            }),
+            true,
+        ),
         (CodexErr::InternalServerError, true),
     ];
 
@@ -479,6 +518,25 @@ fn unexpected_status_non_html_is_unchanged() {
         err.to_string(),
         format!("unexpected status {status}: plain text error, url: {url}")
     );
+}
+
+#[test]
+fn unexpected_status_conflict_explains_recovery() {
+    let err = UnexpectedResponseError {
+        status: StatusCode::CONFLICT,
+        body: r#"{"error":{"message":"tool result does not match an active turn"}}"#.to_string(),
+        user_message: None,
+        url: None,
+        cf_ray: None,
+        request_id: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
+    };
+
+    let message = err.to_string();
+    assert!(message.contains("tool result does not match an active turn"));
+    assert!(message.contains("Retry the turn once"));
+    assert!(message.contains("start a new session"));
 }
 
 #[test]

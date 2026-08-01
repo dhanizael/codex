@@ -464,6 +464,31 @@ fn exec_command_tool_output_formats_truncated_response() {
 }
 
 #[test]
+fn exec_command_tool_output_adapts_default_budget_to_exit_status() {
+    let output = |exit_code, max_output_tokens| ExecCommandToolOutput {
+        event_call_id: "call-adaptive-budget".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: Vec::new(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens,
+        process_id: None,
+        exit_code,
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    assert_eq!(output(Some(0), None).model_output_max_tokens(), 6_000);
+    assert_eq!(output(None, None).model_output_max_tokens(), 6_000);
+    assert_eq!(output(Some(1), None).model_output_max_tokens(), 8_000);
+    assert_eq!(
+        output(Some(1), Some(9_000)).model_output_max_tokens(),
+        9_000
+    );
+}
+
+#[test]
 fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),
@@ -500,4 +525,114 @@ fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
     assert!(text.contains("Original token count: 42000"));
     assert!(text.contains("Warning: truncated output (original token count: 42000)"));
     assert_eq!(text.matches(&marker).count(), 1);
+}
+
+#[test]
+fn exec_command_tool_output_coalesces_repeated_diagnostics() {
+    let diagnostic = "warning: retry timed out\n";
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-repeated-warning".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: diagnostic.repeat(5).into_bytes(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(1),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    assert_eq!(
+        output.truncated_output(10_000),
+        "warning: retry timed out\n[same diagnostic repeated 4 more times]\n"
+    );
+}
+
+#[test]
+fn exec_command_tool_output_strips_ansi_colors_for_model() {
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-colored-output".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: b"plain \x1b[1;31merror\x1b[0m text\n".to_vec(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(1),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    assert_eq!(output.truncated_output(10_000), "plain error text\n");
+}
+
+#[test]
+fn exec_command_tool_output_preserves_non_color_ansi_sequences() {
+    let cursor_control = "before\x1b[2Jafter\n";
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-cursor-control".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: cursor_control.as_bytes().to_vec(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+    assert_eq!(output.truncated_output(10_000), cursor_control);
+}
+
+#[test]
+fn failed_exec_truncation_preserves_diagnostic_from_middle() {
+    let diagnostic = "error: dependency resolution failed at src/main.rs:42";
+    let raw_output = format!(
+        "HEAD\n{}\n{diagnostic}\n{}\nTAIL\n",
+        "ordinary build output\n".repeat(200),
+        "more ordinary build output\n".repeat(200)
+    );
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-middle-error".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: raw_output.into_bytes(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(1),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    let truncated = output.truncated_output(/*max_tokens*/ 200);
+    assert!(truncated.contains("Key diagnostics extracted from full output:"));
+    assert!(truncated.contains(diagnostic));
+    assert!(truncated.contains("HEAD"));
+    assert!(truncated.contains("TAIL"));
+}
+
+#[test]
+fn exec_command_tool_output_preserves_repeated_non_diagnostics() {
+    let repeated_output = "application output\n".repeat(3);
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-repeated-output".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: repeated_output.clone().into_bytes(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    assert_eq!(output.truncated_output(10_000), repeated_output);
 }

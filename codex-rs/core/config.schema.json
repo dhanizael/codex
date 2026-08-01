@@ -794,6 +794,22 @@
           ],
           "description": "Optional path to a JSON model catalog (applied on startup only)."
         },
+        "model_instruction_files": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "default": {},
+          "description": "Exact model slug to instruction augmentation files.",
+          "type": "object"
+        },
+        "model_instruction_replacement_files": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "default": {},
+          "description": "Exact model slug to full instruction replacement files.",
+          "type": "object"
+        },
         "model_instructions_file": {
           "allOf": [
             {
@@ -5492,6 +5508,22 @@
       "description": "Size of the context window for the model, in tokens.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_instruction_files": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "default": {},
+      "description": "Exact model slug to instruction augmentation files. These are appended to model catalog instructions without replacing native behavior.",
+      "type": "object"
+    },
+    "model_instruction_replacement_files": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "default": {},
+      "description": "Exact model slug to full instruction replacement files. This advanced escape hatch replaces catalog instructions for the matching model.",
+      "type": "object"
     },
     "model_instructions_file": {
       "allOf": [

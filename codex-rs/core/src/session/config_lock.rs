@@ -217,6 +217,8 @@ fn drop_lockfile_inputs(lock_config: &mut ConfigToml) {
     lock_config.profiles.clear();
     clear_config_lock_debug_controls(lock_config);
     lock_config.model_instructions_file = None;
+    lock_config.model_instruction_files.clear();
+    lock_config.model_instruction_replacement_files.clear();
     lock_config.experimental_compact_prompt_file = None;
     lock_config.model_catalog_json = None;
     lock_config.sandbox_mode = None;
@@ -242,6 +244,7 @@ mod tests {
     use codex_config::test_support::CloudConfigBundleFixture;
     use codex_models_manager::bundled_models_response;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -254,6 +257,40 @@ mod tests {
             serde_json::to_string(&catalog).expect("serialize model catalog"),
         )
         .expect("write model catalog");
+    }
+
+    #[test]
+    fn lock_drops_model_instruction_file_inputs() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut config = ConfigToml {
+            model_instructions_file: Some(
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+                    temp_dir.path().join("global-instructions.md"),
+                )
+                .expect("absolute path"),
+            ),
+            model_instruction_files: BTreeMap::from([(
+                "gpt-5.6-sol".to_string(),
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+                    temp_dir.path().join("sol-instructions.md"),
+                )
+                .expect("absolute path"),
+            )]),
+            model_instruction_replacement_files: BTreeMap::from([(
+                "gpt-5.6-terra".to_string(),
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+                    temp_dir.path().join("terra-instructions.md"),
+                )
+                .expect("absolute path"),
+            )]),
+            ..ConfigToml::default()
+        };
+
+        drop_lockfile_inputs(&mut config);
+
+        assert_eq!(config.model_instructions_file, None);
+        assert_eq!(config.model_instruction_files, BTreeMap::new());
+        assert_eq!(config.model_instruction_replacement_files, BTreeMap::new());
     }
 
     #[tokio::test]

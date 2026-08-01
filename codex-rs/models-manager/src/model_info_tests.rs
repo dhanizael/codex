@@ -5,6 +5,7 @@ use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::PermissionMessages;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
 fn config_with_personality(personality: Option<Personality>) -> ModelsManagerConfig {
     ModelsManagerConfig {
@@ -36,6 +37,10 @@ fn base_instruction_override_preserves_catalog_approval_messages() {
     });
     let config = ModelsManagerConfig {
         base_instructions: Some("override".to_string()),
+        model_instruction_files: BTreeMap::from([(
+            model.slug.clone(),
+            "lower precedence model override".to_string(),
+        )]),
         ..Default::default()
     };
 
@@ -51,6 +56,99 @@ fn base_instruction_override_preserves_catalog_approval_messages() {
             permissions: None,
         })
     );
+}
+
+#[test]
+fn exact_model_instruction_augmentation_preserves_native_and_personality_variables() {
+    let mut model = model_info_from_slug("gpt-exact");
+    let variables = ModelInstructionsVariables {
+        personality_default: Some("default personality".to_string()),
+        personality_friendly: Some("friendly personality".to_string()),
+        personality_pragmatic: Some("pragmatic personality".to_string()),
+    };
+    model.model_messages = Some(ModelMessages {
+        instructions_template: Some("remote instructions\n{{ personality }}".to_string()),
+        instructions_variables: Some(variables.clone()),
+        approvals: None,
+        auto_review: None,
+        permissions: None,
+    });
+    let config = ModelsManagerConfig {
+        model_instruction_files: BTreeMap::from([(
+            "gpt-exact".to_string(),
+            "file augmentation".to_string(),
+        )]),
+        personality_enabled: true,
+        personality: Some(Personality::Friendly),
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model, &config);
+
+    assert_eq!(
+        updated.get_model_instructions(Some(Personality::Friendly)),
+        "remote instructions\nfriendly personality\n\nfile augmentation"
+    );
+    assert_eq!(
+        updated
+            .model_messages
+            .and_then(|messages| messages.instructions_variables),
+        Some(variables)
+    );
+}
+
+#[test]
+fn exact_model_instruction_replacement_is_explicit_and_preserves_personality_variables() {
+    let mut model = model_info_from_slug("gpt-exact");
+    let variables = ModelInstructionsVariables {
+        personality_default: Some("default personality".to_string()),
+        personality_friendly: Some("friendly personality".to_string()),
+        personality_pragmatic: Some("pragmatic personality".to_string()),
+    };
+    model.model_messages = Some(ModelMessages {
+        instructions_template: Some("remote instructions\n{{ personality }}".to_string()),
+        instructions_variables: Some(variables.clone()),
+        approvals: None,
+        auto_review: None,
+        permissions: None,
+    });
+    let config = ModelsManagerConfig {
+        model_instruction_replacement_files: BTreeMap::from([(
+            "gpt-exact".to_string(),
+            "file replacement\n{{ personality }}".to_string(),
+        )]),
+        personality_enabled: true,
+        personality: Some(Personality::Friendly),
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model, &config);
+
+    assert_eq!(
+        updated.get_model_instructions(Some(Personality::Friendly)),
+        "file replacement\nfriendly personality"
+    );
+    assert_eq!(
+        updated
+            .model_messages
+            .and_then(|messages| messages.instructions_variables),
+        Some(variables)
+    );
+}
+
+#[test]
+fn model_instruction_override_requires_exact_slug() {
+    let model = model_info_from_slug("gpt-exact-variant");
+    let original = model.clone();
+    let config = ModelsManagerConfig {
+        model_instruction_files: BTreeMap::from([(
+            "gpt-exact".to_string(),
+            "must not match by prefix".to_string(),
+        )]),
+        ..Default::default()
+    };
+
+    assert_eq!(with_config_overrides(model, &config), original);
 }
 
 #[test]

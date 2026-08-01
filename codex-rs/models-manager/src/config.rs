@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ModelsResponse;
 
@@ -7,6 +9,8 @@ pub struct ModelsManagerConfig {
     pub model_auto_compact_token_limit: Option<i64>,
     pub tool_output_token_limit: Option<usize>,
     pub base_instructions: Option<String>,
+    pub model_instruction_files: BTreeMap<String, String>,
+    pub model_instruction_replacement_files: BTreeMap<String, String>,
     pub personality_enabled: bool,
     pub personality: Option<Personality>,
     pub model_catalog: Option<ModelsResponse>,

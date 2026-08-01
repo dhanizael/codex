@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::CODEX_CLI_VERSION;
 use anyhow::Context;
 use clap::Parser;
 use codex_api::ApiError;
@@ -487,7 +488,7 @@ async fn build_report(
         schema_version: 1,
         generated_at: generated_at(),
         overall_status,
-        codex_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_version: CODEX_CLI_VERSION.to_string(),
         checks,
     }
 }
@@ -1086,6 +1087,15 @@ fn config_check(config: &Config) -> DoctorCheck {
     details.push(format!(
         "model: {}",
         config.model.as_deref().unwrap_or("<default>")
+    ));
+    details.push(format!(
+        "model reasoning effort: {}",
+        config
+            .model_reasoning_effort
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref()
+            .unwrap_or("<model default>")
     ));
     details.push(format!("model provider: {}", config.model_provider_id));
     details.push(format!("log dir: {}", config.log_dir.display()));
