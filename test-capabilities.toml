@@ -1,0 +1,17 @@
+schema_version = 1
+environment_failure_signatures = [
+  "Failed to bind an OS port for a mock server",
+  "could not create PATH aliases: Read-only file system",
+]
+
+[[host_required]]
+id = "core-unified-exec-loopback"
+reason = "These integration tests bind loopback mock-server ports or create PATH aliases."
+capabilities = ["loopback-bind", "path-alias"]
+filter = '''
+test(suite::exec_policy::unified_exec_whitespace_script_with_collaboration_mode_does_not_panic)
+| test(suite::exec_policy::unified_exec_empty_script_with_collaboration_mode_does_not_panic)
+| test(suite::shell_snapshot::linux_unified_exec_snapshot_preserves_shell_environment_policy_set)
+| test(suite::shell_snapshot::linux_unified_exec_uses_shell_snapshot)
+| test(suite::unified_exec_process_events::exec_command_consumes_pushed_remote_process_events)
+'''
