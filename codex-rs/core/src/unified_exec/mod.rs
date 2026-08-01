@@ -46,6 +46,7 @@ use crate::tools::network_approval::DeferredNetworkApproval;
 mod async_watcher;
 mod errors;
 mod head_tail_buffer;
+mod output_cleanup;
 mod output_spill;
 mod process;
 mod process_manager;
