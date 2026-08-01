@@ -1083,6 +1083,11 @@ where
 fn config_check(config: &Config) -> DoctorCheck {
     let mut details = Vec::new();
     details.push(format!("CODEX_HOME: {}", config.codex_home.display()));
+    if let Some(config_file) = config.config_layer_stack.get_user_config_file() {
+        details.push(format!("active config: {}", config_file.display()));
+    } else {
+        details.push("active config: none".to_string());
+    }
     details.push(format!("cwd: {}", config.cwd.display()));
     details.push(format!(
         "model: {}",
