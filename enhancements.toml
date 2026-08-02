@@ -126,3 +126,15 @@ tests = [
   "just fix -p codex-utils-pty",
   "just bazel-lock-check",
 ]
+
+[[enhancements]]
+id = "portfolio-presentation"
+title = "Document the enhanced patch layer and its engineering rationale"
+kind = "maintenance"
+commits = ["37583c626a51aa09ba54f4325914dcb41d8cb802"]
+areas = ["ci", "documentation", "maintainer-workflow"]
+tests = [
+  "python3 scripts/enhancement_ledger.py check",
+  "python3 -m unittest scripts/test_enhancement_ledger.py scripts/test_capability_test_plan.py",
+  "./scripts/asciicheck.py README.md FORK.md",
+]
