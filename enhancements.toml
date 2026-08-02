@@ -131,7 +131,10 @@ tests = [
 id = "portfolio-presentation"
 title = "Document the enhanced patch layer and its engineering rationale"
 kind = "maintenance"
-commits = ["37583c626a51aa09ba54f4325914dcb41d8cb802"]
+commits = [
+  "37583c626a51aa09ba54f4325914dcb41d8cb802",
+  "b39db0b733df00cb48cad2d77e02bf2f935e34b2",
+]
 areas = ["ci", "documentation", "maintainer-workflow"]
 tests = [
   "python3 scripts/enhancement_ledger.py check",
