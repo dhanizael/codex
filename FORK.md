@@ -111,7 +111,7 @@ The exact prescribed commands for every patch are part of the machine-readable e
 ```shell
 git clone https://github.com/dhanizael/codex.git
 cd codex
-git switch enhanced
+git switch showcase
 cd codex-rs
 
 # Fast feedback

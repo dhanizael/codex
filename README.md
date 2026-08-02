@@ -4,7 +4,7 @@
 
 **A maintainer-focused Codex CLI fork for safer execution, stronger diagnostics, and more reliable long-running agent workflows.**
 
-[![Enhanced patch layer](https://github.com/dhanizael/codex/actions/workflows/enhanced-ci.yml/badge.svg?branch=enhanced)](https://github.com/dhanizael/codex/actions/workflows/enhanced-ci.yml)
+[![Enhanced patch layer](https://github.com/dhanizael/codex/actions/workflows/enhanced-ci.yml/badge.svg?branch=showcase)](https://github.com/dhanizael/codex/actions/workflows/enhanced-ci.yml)
 [![Upstream base](https://img.shields.io/badge/upstream-rust--v0.146.0-5c6ac4)](https://github.com/openai/codex/releases/tag/rust-v0.146.0)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -43,7 +43,7 @@ Prerequisites: Rust 1.95, Git, `just`, and the native build dependencies require
 ```shell
 git clone https://github.com/dhanizael/codex.git
 cd codex
-git switch enhanced
+git switch showcase
 cd codex-rs
 cargo build --release --locked -p codex-cli
 install -Dm755 target/release/codex "$HOME/.local/bin/codex-enhanced"

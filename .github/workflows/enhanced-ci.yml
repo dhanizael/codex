@@ -3,7 +3,7 @@ name: Enhanced patch layer
 on:
   push:
     branches:
-      - enhanced
+      - showcase
       - enhanced/**
   pull_request:
   workflow_dispatch:
