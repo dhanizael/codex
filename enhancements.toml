@@ -136,10 +136,11 @@ commits = [
   "b39db0b733df00cb48cad2d77e02bf2f935e34b2",
   "3af2840ccb0542e826e8777ee25b5a53a524802d",
   "a7da1e23210c10b4578e3f4c1891f09baea35fb5",
+  "2182c1d0cc45bdbb6f09f8d8b868e54a4a3de676",
 ]
 areas = ["ci", "documentation", "maintainer-workflow"]
 tests = [
   "python3 scripts/enhancement_ledger.py check",
   "python3 -m unittest scripts/test_enhancement_ledger.py scripts/test_capability_test_plan.py",
-  "./scripts/asciicheck.py README.md FORK.md",
+  "./scripts/asciicheck.py README.md FORK.md FEATURES.md",
 ]
