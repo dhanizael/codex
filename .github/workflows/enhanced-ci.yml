@@ -36,4 +36,4 @@ jobs:
           python3 -m unittest scripts/test_capability_test_plan.py
 
       - name: Check portfolio documentation
-        run: ./scripts/asciicheck.py README.md FORK.md
+        run: ./scripts/asciicheck.py README.md FORK.md FEATURES.md

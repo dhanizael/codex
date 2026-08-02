@@ -8,7 +8,7 @@
 [![Upstream base](https://img.shields.io/badge/upstream-rust--v0.146.0-5c6ac4)](https://github.com/openai/codex/releases/tag/rust-v0.146.0)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-[Enhancements](#enhancements) | [Engineering case study](FORK.md) | [Build](#try-it-locally) | [Upstream Codex](#upstream-codex-cli)
+[Enhancements](#enhancements) | [Feature inventory](FEATURES.md) | [Engineering case study](FORK.md) | [Build](#try-it-locally) | [Upstream Codex](#upstream-codex-cli)
 
 </div>
 
@@ -35,7 +35,7 @@ The fork carries an explicit patch ledger spanning the Rust CLI, core runtime, h
 | Test infrastructure | Capability-aware test partitioning | Separate sandbox-safe tests from capability-sensitive tests |
 | Provenance | Build provenance and source-parity reporting | Make the running binary auditable |
 
-See [FORK.md](FORK.md) for the design rationale, patch architecture, validation strategy, and maintenance model.
+See [FEATURES.md](FEATURES.md) for the complete capability inventory and [FORK.md](FORK.md) for the design rationale, patch architecture, validation strategy, and maintenance model.
 
 ## Try it locally
 
