@@ -1,0 +1,39 @@
+name: Enhanced patch layer
+
+on:
+  push:
+    branches:
+      - enhanced
+      - enhanced/**
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enhanced-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-integrity:
+    name: Patch integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate enhancement ledger
+        run: python3 scripts/enhancement_ledger.py check
+
+      - name: Test patch-layer tooling
+        run: |
+          python3 -m unittest scripts/test_enhancement_ledger.py
+          python3 -m unittest scripts/test_capability_test_plan.py
+
+      - name: Check portfolio documentation
+        run: ./scripts/asciicheck.py README.md FORK.md
