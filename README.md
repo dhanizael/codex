@@ -8,7 +8,7 @@
 [![Upstream base](https://img.shields.io/badge/upstream-rust--v0.146.0-5c6ac4)](https://github.com/openai/codex/releases/tag/rust-v0.146.0)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-[Enhancements](#enhancements) | [Engineering case study](FORK.md) | [Build](#build-the-fork) | [Upstream Codex](#upstream-codex-cli)
+[Enhancements](#enhancements) | [Engineering case study](FORK.md) | [Build](#try-it-locally) | [Upstream Codex](#upstream-codex-cli)
 
 </div>
 
