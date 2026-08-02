@@ -134,6 +134,7 @@ kind = "maintenance"
 commits = [
   "37583c626a51aa09ba54f4325914dcb41d8cb802",
   "b39db0b733df00cb48cad2d77e02bf2f935e34b2",
+  "3af2840ccb0542e826e8777ee25b5a53a524802d",
 ]
 areas = ["ci", "documentation", "maintainer-workflow"]
 tests = [
