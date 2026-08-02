@@ -58,6 +58,20 @@ The fork is not a detached rewrite. Each custom capability is registered in [`en
 
 The initial patch adds configuration and session guards, safer execution-output processing, model metadata checks, and explicit protocol errors. The goal is to turn silent drift into diagnosable state while keeping failure behavior bounded.
 
+### Context-efficient tool output
+
+The model-visible representation of command output is optimized for signal while the complete output remains available for debugging:
+
+- successful command output defaults to a 6,000-token budget;
+- failed command output defaults to an 8,000-token budget so diagnostics have more room;
+- custom-tool output stored in history is capped at 6,000 tokens even when the broader history policy is larger;
+- repeated warning and error lines are coalesced;
+- ANSI color sequences are removed before output is sent to the model;
+- key failure diagnostics can be extracted from the middle of long output before head-and-tail truncation;
+- truncated unified-exec output can reference a private file containing the complete stream.
+
+This reduces avoidable model-visible terminal noise and protects context capacity. It is not presented as a guaranteed API-cost reduction: realized savings depend on the commands, model, session history, and provider accounting.
+
 ### Selective local compaction retry
 
 Local compaction is retried only for failures classified as safe to retry. This avoids a generic retry loop that could repeat deterministic failures or hide a deeper error.

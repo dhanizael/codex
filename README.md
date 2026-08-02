@@ -2,7 +2,7 @@
 
 # Codex Enhanced
 
-**A maintainer-focused Codex CLI fork for safer execution, stronger diagnostics, and more reliable long-running agent workflows.**
+**A maintainer-focused Codex CLI fork for context-efficient tool output, safer execution, stronger diagnostics, and more reliable long-running agent workflows.**
 
 [![Enhanced patch layer](https://github.com/dhanizael/codex/actions/workflows/enhanced-ci.yml/badge.svg?branch=showcase)](https://github.com/dhanizael/codex/actions/workflows/enhanced-ci.yml)
 [![Upstream base](https://img.shields.io/badge/upstream-rust--v0.146.0-5c6ac4)](https://github.com/openai/codex/releases/tag/rust-v0.146.0)
@@ -17,7 +17,7 @@
 
 ## Why this fork exists
 
-Agent reliability is often determined at the unglamorous edges: subprocess cleanup, bounded output, deterministic diagnostics, configuration integrity, and test behavior under restricted environments. Codex Enhanced explores those edges as a transparent patch layer over a pinned upstream release.
+Agent reliability is often determined at the unglamorous edges: context-efficient tool output, subprocess cleanup, bounded retention, deterministic diagnostics, configuration integrity, and test behavior under restricted environments. Codex Enhanced explores those edges as a transparent patch layer over a pinned upstream release.
 
 The fork carries an explicit patch ledger spanning the Rust CLI, core runtime, hooks, TUI, configuration, protocol, and maintainer tooling. Every enhancement maps to its implementation commit, affected area, and prescribed verification in [`enhancements.toml`](enhancements.toml).
 
@@ -25,8 +25,9 @@ The fork carries an explicit patch ledger spanning the Rust CLI, core runtime, h
 
 | Area | What changed | Engineering goal |
 | --- | --- | --- |
+| Context efficiency | Adaptive 6K/8K tool-output budgets, repeated-diagnostic coalescing, ANSI cleanup, and key-error extraction | Spend model context on signal instead of terminal noise |
 | Runtime hardening | Configuration guards, safer output processing, and runtime checks | Fail safely and make invalid state visible |
-| Unified exec | File-backed complete output with bounded retention | Preserve evidence without unbounded context or disk growth |
+| Unified exec | File-backed complete output with bounded retention | Keep full evidence available outside the model-visible context |
 | Hook execution | Bounded streams, timeouts, and process-tree termination | Prevent runaway hooks and orphaned processes |
 | Local doctor | Deterministic preflight checks and redacted JSON reports | Detect blockers before an expensive agent turn |
 | Session workflow | Pinning in the resume picker with snapshot coverage | Keep important work easy to find |
